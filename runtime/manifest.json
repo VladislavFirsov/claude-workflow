@@ -1,0 +1,131 @@
+{
+  "version": "1.0",
+  "description": "Runtime Layer component manifest for parallel generation",
+  "quality_gates": {
+    "tier1_coverage": 90,
+    "tier2_coverage": 90,
+    "tier3_coverage": 95
+  },
+  "components": [
+    {
+      "name": "TokenEstimator",
+      "tier": 1,
+      "path": "internal/cost/token_estimator.go",
+      "package": "cost",
+      "interface": "TokenEstimator",
+      "types": ["TaskInput", "ContextBundle", "TokenCount"],
+      "errors": ["ErrInvalidInput"],
+      "description": "Estimates token usage with a character-based heuristic"
+    },
+    {
+      "name": "CostCalculator",
+      "tier": 1,
+      "path": "internal/cost/cost_calculator.go",
+      "package": "cost",
+      "interface": "CostCalculator",
+      "types": ["TokenCount", "ModelID", "Cost", "Currency"],
+      "errors": ["ErrModelUnknown"],
+      "description": "Calculates cost based on token usage and model pricing"
+    },
+    {
+      "name": "UsageTracker",
+      "tier": 2,
+      "path": "internal/cost/usage_tracker.go",
+      "package": "cost",
+      "interface": "UsageTracker",
+      "types": ["Run", "RunID", "Usage", "TokenCount", "Cost", "Currency"],
+      "errors": [],
+      "description": "Tracks token and cost usage for a run"
+    },
+    {
+      "name": "BudgetEnforcer",
+      "tier": 3,
+      "path": "internal/cost/budget_enforcer.go",
+      "package": "cost",
+      "interface": "BudgetEnforcer",
+      "types": ["Run", "RunID", "RunState", "RunPolicy", "Cost", "Currency", "Usage", "TokenCount"],
+      "errors": ["ErrBudgetExceeded", "ErrBudgetNotSet", "ErrInvalidInput"],
+      "description": "Enforces budget limits for runs - CRITICAL: errors mean client money loss"
+    },
+    {
+      "name": "Scheduler",
+      "tier": 3,
+      "path": "internal/orchestration/scheduler.go",
+      "package": "orchestration",
+      "interface": "Scheduler",
+      "types": ["Run", "RunID", "RunState", "Task", "TaskID", "TaskState", "DAG", "DAGNode", "TaskResult"],
+      "errors": ["ErrInvalidInput", "ErrRunCompleted", "ErrDAGInvalid", "ErrTaskNotFound", "ErrTaskNotReady"],
+      "description": "Determines ready tasks and updates DAG state on completion - CRITICAL ordering"
+    },
+    {
+      "name": "DependencyResolver",
+      "tier": 2,
+      "path": "internal/orchestration/dependency_resolver.go",
+      "package": "orchestration",
+      "interface": "DependencyResolver",
+      "types": ["Task", "TaskID", "TaskState", "DAG", "DAGNode"],
+      "errors": ["ErrDAGCycle", "ErrDAGInvalid", "ErrDepNotFound"],
+      "description": "Builds and validates task dependency graph"
+    },
+    {
+      "name": "ParallelExecutor",
+      "tier": 3,
+      "path": "internal/orchestration/parallel_executor.go",
+      "package": "orchestration",
+      "interface": "ParallelExecutor",
+      "types": ["Run", "RunID", "RunState", "RunPolicy", "Task", "TaskID", "TaskState", "TaskResult", "TaskError", "Usage", "Cost", "TokenCount", "Currency"],
+      "errors": ["ErrTaskNotFound", "ErrTaskNotReady", "ErrTaskFailed", "ErrTaskTimeout", "ErrTaskCancelled"],
+      "description": "Executes tasks with bounded concurrency - CRITICAL: race conditions"
+    },
+    {
+      "name": "QueueManager",
+      "tier": 2,
+      "path": "internal/orchestration/queue_manager.go",
+      "package": "orchestration",
+      "interface": "QueueManager",
+      "types": ["TaskID"],
+      "errors": [],
+      "description": "FIFO queue for ready tasks"
+    },
+    {
+      "name": "ContextBuilder",
+      "tier": 2,
+      "path": "internal/context/context_builder.go",
+      "package": "context",
+      "interface": "ContextBuilder",
+      "types": ["Run", "RunID", "Task", "TaskID", "TaskResult", "ContextBundle"],
+      "errors": ["ErrTaskNotFound"],
+      "description": "Builds context bundle for a task from run state"
+    },
+    {
+      "name": "ContextCompactor",
+      "tier": 3,
+      "path": "internal/context/context_compactor.go",
+      "package": "context",
+      "interface": "ContextCompactor",
+      "types": ["ContextBundle", "ContextPolicy", "TokenCount"],
+      "errors": ["ErrContextTooLarge", "ErrContextEmpty", "ErrInvalidInput"],
+      "description": "Compacts context to fit token limits - CRITICAL: information loss risk"
+    },
+    {
+      "name": "ContextRouter",
+      "tier": 2,
+      "path": "internal/context/context_router.go",
+      "package": "context",
+      "interface": "ContextRouter",
+      "types": ["Run", "RunID", "Task", "TaskID", "TaskResult", "TaskInput"],
+      "errors": ["ErrTaskNotFound"],
+      "description": "Routes output from one task to another's input"
+    },
+    {
+      "name": "MemoryManager",
+      "tier": 2,
+      "path": "internal/context/memory_manager.go",
+      "package": "context",
+      "interface": "MemoryManager",
+      "types": ["Run", "RunID"],
+      "errors": [],
+      "description": "Manages short-term key-value memory within a run"
+    }
+  ]
+}
