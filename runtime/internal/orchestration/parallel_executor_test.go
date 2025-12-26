@@ -54,7 +54,7 @@ func TestParallelExecutor_Execute(t *testing.T) {
 			wantErr: contracts.ErrTaskNotFound,
 		},
 		{
-			name: "task already completed returns error",
+			name: "completed task returns error (defensive check)",
 			run: &contracts.Run{
 				ID:    "run-1",
 				State: contracts.RunRunning,
@@ -66,12 +66,24 @@ func TestParallelExecutor_Execute(t *testing.T) {
 			wantErr: contracts.ErrTaskNotReady,
 		},
 		{
-			name: "task failed returns error",
+			name: "failed task returns error (defensive check)",
 			run: &contracts.Run{
 				ID:    "run-1",
 				State: contracts.RunRunning,
 				Tasks: map[contracts.TaskID]*contracts.Task{
 					"task-1": {ID: "task-1", State: contracts.TaskFailed},
+				},
+			},
+			taskID:  "task-1",
+			wantErr: contracts.ErrTaskNotReady,
+		},
+		{
+			name: "skipped task returns error (defensive check)",
+			run: &contracts.Run{
+				ID:    "run-1",
+				State: contracts.RunRunning,
+				Tasks: map[contracts.TaskID]*contracts.Task{
+					"task-1": {ID: "task-1", State: contracts.TaskSkipped},
 				},
 			},
 			taskID:  "task-1",
@@ -106,7 +118,7 @@ func TestParallelExecutor_Execute(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			executor := NewParallelExecutor(2, nil)
-			result, err := executor.Execute(tt.run, tt.taskID)
+			result, err := executor.Execute(context.Background(), tt.run, tt.taskID)
 
 			if tt.wantErr != nil {
 				if err == nil {
@@ -126,11 +138,8 @@ func TestParallelExecutor_Execute(t *testing.T) {
 				t.Fatal("Execute() result is nil")
 			}
 
-			// Verify task state updated
-			task := tt.run.Tasks[tt.taskID]
-			if task.State != contracts.TaskCompleted {
-				t.Errorf("task state = %v, want %v", task.State, contracts.TaskCompleted)
-			}
+			// Note: ParallelExecutor is now "pure" - it does NOT mutate task.State
+			// State management is handled by Orchestrator + Scheduler
 		})
 	}
 }
@@ -152,7 +161,7 @@ func TestParallelExecutor_ExecutorFunc(t *testing.T) {
 		},
 	}
 
-	result, err := executor.Execute(run, "task-1")
+	result, err := executor.Execute(context.Background(), run, "task-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -181,18 +190,13 @@ func TestParallelExecutor_ExecutorError(t *testing.T) {
 		},
 	}
 
-	_, err := executor.Execute(run, "task-1")
+	_, err := executor.Execute(context.Background(), run, "task-1")
 	if !errors.Is(err, contracts.ErrTaskFailed) {
 		t.Errorf("expected ErrTaskFailed, got %v", err)
 	}
 
-	task := run.Tasks["task-1"]
-	if task.State != contracts.TaskFailed {
-		t.Errorf("task state = %v, want %v", task.State, contracts.TaskFailed)
-	}
-	if task.Error == nil {
-		t.Error("task.Error is nil")
-	}
+	// Note: ParallelExecutor is now "pure" - it does NOT mutate task.State
+	// Orchestrator is responsible for setting TaskFailed on error
 }
 
 func TestParallelExecutor_Timeout(t *testing.T) {
@@ -216,15 +220,13 @@ func TestParallelExecutor_Timeout(t *testing.T) {
 		},
 	}
 
-	_, err := executor.Execute(run, "task-1")
+	_, err := executor.Execute(context.Background(), run, "task-1")
 	if !errors.Is(err, contracts.ErrTaskTimeout) {
 		t.Errorf("expected ErrTaskTimeout, got %v", err)
 	}
 
-	task := run.Tasks["task-1"]
-	if task.State != contracts.TaskFailed {
-		t.Errorf("task state = %v, want %v", task.State, contracts.TaskFailed)
-	}
+	// Note: ParallelExecutor is now "pure" - it does NOT mutate task.State
+	// Orchestrator is responsible for setting TaskFailed on timeout
 }
 
 func TestParallelExecutor_BoundedConcurrency(t *testing.T) {
@@ -266,7 +268,7 @@ func TestParallelExecutor_BoundedConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func(id contracts.TaskID) {
 			defer wg.Done()
-			executor.Execute(run, id)
+			executor.Execute(context.Background(), run, id)
 		}(taskID)
 	}
 	wg.Wait()
@@ -300,7 +302,7 @@ func TestParallelExecutor_PreventsDuplicateExecution(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := executor.Execute(run, "task-1")
+			_, err := executor.Execute(context.Background(), run, "task-1")
 			results <- err
 		}()
 		time.Sleep(10 * time.Millisecond) // Small delay to ensure ordering
@@ -336,7 +338,7 @@ func TestParallelExecutor_DefaultMaxParallelism(t *testing.T) {
 		},
 	}
 
-	result, err := executor.Execute(run, "task-1")
+	result, err := executor.Execute(context.Background(), run, "task-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -358,19 +360,20 @@ func TestParallelExecutor_FromPolicy(t *testing.T) {
 		},
 	}
 
-	_, err := executor.Execute(run, "task-1")
+	_, err := executor.Execute(context.Background(), run, "task-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestParallelExecutor_ResultStored(t *testing.T) {
+func TestParallelExecutor_ResultReturned(t *testing.T) {
 	executor := NewParallelExecutor(1, func(ctx context.Context, task *contracts.Task) (*contracts.TaskResult, error) {
 		return &contracts.TaskResult{
 			Output: "result output",
 			Outputs: map[string]string{
 				"key1": "value1",
 			},
+			Usage: contracts.Usage{Tokens: 100},
 		}, nil
 	})
 
@@ -382,22 +385,19 @@ func TestParallelExecutor_ResultStored(t *testing.T) {
 		},
 	}
 
-	result, err := executor.Execute(run, "task-1")
+	result, err := executor.Execute(context.Background(), run, "task-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Check result
+	// Check result is returned correctly
 	if result.Output != "result output" {
 		t.Errorf("result.Output = %q, want %q", result.Output, "result output")
 	}
+	if result.Outputs["key1"] != "value1" {
+		t.Errorf("result.Outputs[key1] = %q, want %q", result.Outputs["key1"], "value1")
+	}
 
-	// Check task.Outputs is set
-	task := run.Tasks["task-1"]
-	if task.Outputs == nil {
-		t.Fatal("task.Outputs is nil")
-	}
-	if task.Outputs.Output != "result output" {
-		t.Errorf("task.Outputs.Output = %q, want %q", task.Outputs.Output, "result output")
-	}
+	// Note: ParallelExecutor is now "pure" - it does NOT set task.Outputs
+	// Scheduler.MarkComplete is responsible for that
 }

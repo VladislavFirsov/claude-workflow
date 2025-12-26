@@ -49,11 +49,13 @@ func (cb *contextBuilder) Build(run *contracts.Run, taskID contracts.TaskID) (*c
 			continue
 		}
 
-		// Only include outputs from completed dependencies
-		if depTask.Outputs != nil {
-			if depTask.Outputs.Output != "" {
-				bundle.Messages = append(bundle.Messages, depTask.Outputs.Output)
-			}
+		// Only include outputs from completed dependencies (not failed/running/etc.)
+		if depTask.State != contracts.TaskCompleted {
+			continue
+		}
+
+		if depTask.Outputs != nil && depTask.Outputs.Output != "" {
+			bundle.Messages = append(bundle.Messages, depTask.Outputs.Output)
 		}
 	}
 

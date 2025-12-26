@@ -6,22 +6,20 @@ import (
 	"github.com/anthropics/claude-workflow/runtime/contracts"
 )
 
-// usageTracker implements contracts.UsageTracker to track token and cost usage for a run.
+// usageTracker implements contracts.UsageTracker to track token usage for a run.
+// Writes directly to run.Usage for synchronization with BudgetEnforcer.
 // Thread-safe for concurrent access using sync.Mutex.
 type usageTracker struct {
 	mu sync.Mutex
-	// Map from RunID to accumulated Usage
-	usage map[contracts.RunID]contracts.Usage
 }
 
 // NewUsageTracker creates a new UsageTracker.
 func NewUsageTracker() contracts.UsageTracker {
-	return &usageTracker{
-		usage: make(map[contracts.RunID]contracts.Usage),
-	}
+	return &usageTracker{}
 }
 
-// Add adds usage to the run's total.
+// Add adds usage tokens to the run's total.
+// Only updates Tokens - Cost is updated by BudgetEnforcer.Record() to avoid double-counting.
 // If run is nil, it gracefully returns without panicking.
 func (ut *usageTracker) Add(run *contracts.Run, usage contracts.Usage) {
 	if run == nil {
@@ -31,23 +29,11 @@ func (ut *usageTracker) Add(run *contracts.Run, usage contracts.Usage) {
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
 
-	// Get the current usage for this run
-	current := ut.usage[run.ID]
-
-	// Add tokens
-	current.Tokens += usage.Tokens
-
-	// Add cost amount (keeping the currency from either existing or new usage)
-	if current.Cost.Currency == "" {
-		current.Cost.Currency = usage.Cost.Currency
-	}
-	current.Cost.Amount += usage.Cost.Amount
-
-	// Store the updated usage
-	ut.usage[run.ID] = current
+	// Only update Tokens - Cost is updated by BudgetEnforcer.Record()
+	run.Usage.Tokens += usage.Tokens
 }
 
-// Snapshot returns the current usage for the run as a copy.
+// Snapshot returns the current usage for the run.
 // If run is nil, it returns a zero-value Usage struct.
 func (ut *usageTracker) Snapshot(run *contracts.Run) contracts.Usage {
 	if run == nil {
@@ -57,6 +43,5 @@ func (ut *usageTracker) Snapshot(run *contracts.Run) contracts.Usage {
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
 
-	// Return a copy of the usage
-	return ut.usage[run.ID]
+	return run.Usage
 }

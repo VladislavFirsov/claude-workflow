@@ -33,7 +33,8 @@ func TestBuild_Success_SingleDependency(t *testing.T) {
 
 	// Task 1 is completed with output
 	run.Tasks[task1ID] = &contracts.Task{
-		ID: task1ID,
+		ID:    task1ID,
+		State: contracts.TaskCompleted,
 		Outputs: &contracts.TaskResult{
 			Output: "task1 output",
 		},
@@ -93,7 +94,8 @@ func TestBuild_Success_MultipleDependencies(t *testing.T) {
 
 	// Task 1 completed
 	run.Tasks[task1ID] = &contracts.Task{
-		ID: task1ID,
+		ID:    task1ID,
+		State: contracts.TaskCompleted,
 		Outputs: &contracts.TaskResult{
 			Output: "output from task1",
 		},
@@ -101,7 +103,8 @@ func TestBuild_Success_MultipleDependencies(t *testing.T) {
 
 	// Task 2 completed
 	run.Tasks[task2ID] = &contracts.Task{
-		ID: task2ID,
+		ID:    task2ID,
+		State: contracts.TaskCompleted,
 		Outputs: &contracts.TaskResult{
 			Output: "output from task2",
 		},
@@ -272,7 +275,8 @@ func TestBuild_Success_DependencyEmptyOutput(t *testing.T) {
 
 	// Task 1 is completed but has empty output
 	run.Tasks[task1ID] = &contracts.Task{
-		ID: task1ID,
+		ID:    task1ID,
+		State: contracts.TaskCompleted,
 		Outputs: &contracts.TaskResult{
 			Output: "", // Empty output
 		},
@@ -308,9 +312,10 @@ func TestBuild_Success_MissingDependency(t *testing.T) {
 	task2ID := contracts.TaskID("task2")
 	missingID := contracts.TaskID("missing")
 
-	// Task 1 is present
+	// Task 1 is present and completed
 	run.Tasks[task1ID] = &contracts.Task{
-		ID: task1ID,
+		ID:    task1ID,
+		State: contracts.TaskCompleted,
 		Outputs: &contracts.TaskResult{
 			Output: "task1 output",
 		},
@@ -464,7 +469,8 @@ func TestBuild_Success_LargeNumberOfDependencies(t *testing.T) {
 		taskID := contracts.TaskID("dep" + string(rune(48+i)))
 		deps = append(deps, taskID)
 		run.Tasks[taskID] = &contracts.Task{
-			ID: taskID,
+			ID:    taskID,
+			State: contracts.TaskCompleted,
 			Outputs: &contracts.TaskResult{
 				Output: "output " + string(rune(48+i)),
 			},
@@ -502,7 +508,8 @@ func TestBuild_Success_MixedCompletedAndIncompleted(t *testing.T) {
 
 	// Task 1: completed with output
 	run.Tasks[task1ID] = &contracts.Task{
-		ID: task1ID,
+		ID:    task1ID,
+		State: contracts.TaskCompleted,
 		Outputs: &contracts.TaskResult{
 			Output: "output1",
 		},
@@ -510,16 +517,18 @@ func TestBuild_Success_MixedCompletedAndIncompleted(t *testing.T) {
 
 	// Task 2: completed but empty output
 	run.Tasks[task2ID] = &contracts.Task{
-		ID: task2ID,
+		ID:    task2ID,
+		State: contracts.TaskCompleted,
 		Outputs: &contracts.TaskResult{
 			Output: "",
 		},
 	}
 
-	// Task 3: not completed (nil Outputs)
+	// Task 3: not completed (Pending state)
 	notCompletedID := contracts.TaskID("notcompleted")
 	run.Tasks[notCompletedID] = &contracts.Task{
 		ID:      notCompletedID,
+		State:   contracts.TaskPending,
 		Outputs: nil,
 	}
 
@@ -535,12 +544,72 @@ func TestBuild_Success_MixedCompletedAndIncompleted(t *testing.T) {
 		t.Fatalf("Build() error = %v, want nil", err)
 	}
 
-	// Should only have task1 output
+	// Should only have task1 output (task2 has empty output, notcompleted is not completed)
 	if len(bundle.Messages) != 1 {
 		t.Fatalf("Messages length = %d, want 1", len(bundle.Messages))
 	}
 	if bundle.Messages[0] != "output1" {
 		t.Fatalf("Messages[0] = %q, want %q", bundle.Messages[0], "output1")
+	}
+}
+
+func TestBuild_FailedDependencyNotIncluded(t *testing.T) {
+	cb := NewContextBuilder()
+
+	run := &contracts.Run{
+		ID:     contracts.RunID("run1"),
+		Tasks:  make(map[contracts.TaskID]*contracts.Task),
+		Memory: map[string]string{},
+	}
+
+	// Failed task with output (should NOT be included)
+	failedID := contracts.TaskID("failed")
+	run.Tasks[failedID] = &contracts.Task{
+		ID:    failedID,
+		State: contracts.TaskFailed,
+		Outputs: &contracts.TaskResult{
+			Output: "failed output",
+		},
+	}
+
+	// Completed task with output (should be included)
+	completedID := contracts.TaskID("completed")
+	run.Tasks[completedID] = &contracts.Task{
+		ID:    completedID,
+		State: contracts.TaskCompleted,
+		Outputs: &contracts.TaskResult{
+			Output: "completed output",
+		},
+	}
+
+	// Running task with output (should NOT be included)
+	runningID := contracts.TaskID("running")
+	run.Tasks[runningID] = &contracts.Task{
+		ID:    runningID,
+		State: contracts.TaskRunning,
+		Outputs: &contracts.TaskResult{
+			Output: "running output",
+		},
+	}
+
+	// Main task depends on all
+	mainTaskID := contracts.TaskID("main")
+	run.Tasks[mainTaskID] = &contracts.Task{
+		ID:   mainTaskID,
+		Deps: []contracts.TaskID{failedID, completedID, runningID},
+	}
+
+	bundle, err := cb.Build(run, mainTaskID)
+	if err != nil {
+		t.Fatalf("Build() error = %v, want nil", err)
+	}
+
+	// Should only have completed output
+	if len(bundle.Messages) != 1 {
+		t.Fatalf("Messages length = %d, want 1", len(bundle.Messages))
+	}
+	if bundle.Messages[0] != "completed output" {
+		t.Fatalf("Messages[0] = %q, want %q", bundle.Messages[0], "completed output")
 	}
 }
 
@@ -563,7 +632,8 @@ func BenchmarkBuild(b *testing.B) {
 		taskID := contracts.TaskID("dep" + string(rune(48+i)))
 		deps = append(deps, taskID)
 		run.Tasks[taskID] = &contracts.Task{
-			ID: taskID,
+			ID:    taskID,
+			State: contracts.TaskCompleted,
 			Outputs: &contracts.TaskResult{
 				Output: "output",
 			},

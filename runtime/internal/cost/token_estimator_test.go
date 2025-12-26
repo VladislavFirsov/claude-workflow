@@ -33,6 +33,24 @@ func TestTokenEstimator_Estimate(t *testing.T) {
 			wantMax: 0,
 		},
 		{
+			name: "short text returns minimum 1 token",
+			input: &contracts.TaskInput{
+				Prompt: "Hi", // 2 chars < 4 chars/token, but non-empty → 1 token
+			},
+			ctx:     nil,
+			wantMin: 1,
+			wantMax: 1,
+		},
+		{
+			name: "single char returns minimum 1 token",
+			input: &contracts.TaskInput{
+				Prompt: "X", // 1 char < 4 chars/token, but non-empty → 1 token
+			},
+			ctx:     nil,
+			wantMin: 1,
+			wantMax: 1,
+		},
+		{
 			name: "prompt only",
 			input: &contracts.TaskInput{
 				Prompt: "Hello, world!", // 13 chars → 3 tokens

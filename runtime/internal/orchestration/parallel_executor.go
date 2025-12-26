@@ -51,38 +51,47 @@ func NewParallelExecutorFromPolicy(policy contracts.RunPolicy, executor TaskExec
 func defaultExecutor(ctx context.Context, task *contracts.Task) (*contracts.TaskResult, error) {
 	return &contracts.TaskResult{
 		Output: fmt.Sprintf("executed: %s", task.ID),
+		Usage: contracts.Usage{
+			Tokens: 100, // Non-zero for invariant check
+			Cost:   contracts.Cost{Amount: 0.001, Currency: "USD"},
+		},
 	}, nil
 }
 
 // Execute runs a task and returns its result.
 // Blocks until a concurrency slot is available.
+// ctx is used for cancellation; if run.Policy.TimeoutMs > 0, a timeout is also applied.
+//
+// IMPORTANT: This executor is "pure" - it does NOT mutate task.State or task.Outputs.
+// State management is the responsibility of Orchestrator and Scheduler.
+//
 // Returns error if:
-// - run is nil (ErrInvalidInput)
+// - ctx is nil or run is nil (ErrInvalidInput)
 // - task not found (ErrTaskNotFound)
-// - task not ready (ErrTaskNotReady)
-// - task already running (ErrTaskNotReady)
+// - task already being executed by this executor (ErrTaskNotReady)
 // - execution timeout (ErrTaskTimeout)
 // - execution failed (ErrTaskFailed)
-func (p *parallelExecutor) Execute(run *contracts.Run, taskID contracts.TaskID) (*contracts.TaskResult, error) {
-	if run == nil {
+func (p *parallelExecutor) Execute(ctx context.Context, run *contracts.Run, taskID contracts.TaskID) (*contracts.TaskResult, error) {
+	if ctx == nil || run == nil {
 		return nil, contracts.ErrInvalidInput
 	}
 
-	// Validate task exists
-	task, err := p.validateAndMarkRunning(run, taskID)
+	// Validate task exists and track execution
+	task, err := p.validateAndTrack(run, taskID)
 	if err != nil {
 		return nil, err
 	}
+	defer p.untrack(taskID)
 
 	// Acquire semaphore slot (blocks if at capacity)
 	p.sem <- struct{}{}
 	defer func() { <-p.sem }()
 
-	// Create context with timeout if specified
-	ctx := context.Background()
+	// Apply timeout from policy if specified
+	execCtx := ctx
 	if run.Policy.TimeoutMs > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(run.Policy.TimeoutMs)*time.Millisecond)
+		execCtx, cancel = context.WithTimeout(ctx, time.Duration(run.Policy.TimeoutMs)*time.Millisecond)
 		defer cancel()
 	}
 
@@ -91,7 +100,7 @@ func (p *parallelExecutor) Execute(run *contracts.Run, taskID contracts.TaskID) 
 	errCh := make(chan error, 1)
 
 	go func() {
-		result, err := p.executor(ctx, task)
+		result, err := p.executor(execCtx, task)
 		if err != nil {
 			errCh <- err
 		} else {
@@ -99,24 +108,25 @@ func (p *parallelExecutor) Execute(run *contracts.Run, taskID contracts.TaskID) 
 		}
 	}()
 
-	// Wait for result or timeout
+	// Wait for result or timeout/cancellation
 	select {
 	case result := <-resultCh:
-		p.markCompleted(run, taskID, result)
 		return result, nil
 
 	case err := <-errCh:
-		p.markFailed(run, taskID, err)
 		return nil, fmt.Errorf("task %s failed: %w: %v", taskID, contracts.ErrTaskFailed, err)
 
-	case <-ctx.Done():
-		p.markFailed(run, taskID, ctx.Err())
-		return nil, fmt.Errorf("task %s timed out: %w", taskID, contracts.ErrTaskTimeout)
+	case <-execCtx.Done():
+		if execCtx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("task %s timed out: %w", taskID, contracts.ErrTaskTimeout)
+		}
+		return nil, fmt.Errorf("task %s cancelled: %w", taskID, contracts.ErrTaskCancelled)
 	}
 }
 
-// validateAndMarkRunning validates task state and marks it as running.
-func (p *parallelExecutor) validateAndMarkRunning(run *contracts.Run, taskID contracts.TaskID) (*contracts.Task, error) {
+// validateAndTrack validates task exists and tracks it as being executed.
+// Does NOT mutate task state - that's Orchestrator's responsibility.
+func (p *parallelExecutor) validateAndTrack(run *contracts.Run, taskID contracts.TaskID) (*contracts.Task, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -134,46 +144,31 @@ func (p *parallelExecutor) validateAndMarkRunning(run *contracts.Run, taskID con
 		return nil, fmt.Errorf("task %s not found: %w", taskID, contracts.ErrTaskNotFound)
 	}
 
-	// Check task is ready to execute
-	if task.State != contracts.TaskPending && task.State != contracts.TaskReady {
-		return nil, fmt.Errorf("task %s is in state %s: %w", taskID, task.State, contracts.ErrTaskNotReady)
+	// Defensive check: reject terminal tasks
+	// NOTE: TaskRunning is NOT blocked here because Orchestrator sets it before calling Execute.
+	// The running map handles duplicate prevention within the same executor instance.
+	// Edge case (different executor instance with stale TaskRunning) is accepted for v1.
+	if task.State == contracts.TaskCompleted ||
+		task.State == contracts.TaskFailed ||
+		task.State == contracts.TaskSkipped {
+		return nil, fmt.Errorf("task %s is in terminal state %s: %w",
+			taskID, task.State, contracts.ErrTaskNotReady)
 	}
 
-	// Check not already running (tracked internally)
+	// Check not already being executed by this executor
 	if p.running[taskID] {
-		return nil, fmt.Errorf("task %s is already running: %w", taskID, contracts.ErrTaskNotReady)
+		return nil, fmt.Errorf("task %s is already being executed: %w", taskID, contracts.ErrTaskNotReady)
 	}
 
-	// Mark as running
-	task.State = contracts.TaskRunning
+	// Track as running (internally only, don't mutate task.State)
 	p.running[taskID] = true
 
 	return task, nil
 }
 
-// markCompleted marks task as completed and stores result.
-func (p *parallelExecutor) markCompleted(run *contracts.Run, taskID contracts.TaskID, result *contracts.TaskResult) {
+// untrack removes task from internal tracking.
+func (p *parallelExecutor) untrack(taskID contracts.TaskID) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	if task, exists := run.Tasks[taskID]; exists {
-		task.State = contracts.TaskCompleted
-		task.Outputs = result
-	}
-	delete(p.running, taskID)
-}
-
-// markFailed marks task as failed and stores error.
-func (p *parallelExecutor) markFailed(run *contracts.Run, taskID contracts.TaskID, err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if task, exists := run.Tasks[taskID]; exists {
-		task.State = contracts.TaskFailed
-		task.Error = &contracts.TaskError{
-			Code:    "EXECUTION_FAILED",
-			Message: err.Error(),
-		}
-	}
 	delete(p.running, taskID)
 }

@@ -64,5 +64,11 @@ func (e *tokenEstimator) Estimate(input *contracts.TaskInput, ctx *contracts.Con
 	}
 
 	tokens := totalChars / e.charsPerToken
+
+	// Minimum 1 token for non-empty input (prevents budget bypass on small requests)
+	if totalChars > 0 && tokens == 0 {
+		tokens = 1
+	}
+
 	return contracts.TokenCount(tokens), nil
 }

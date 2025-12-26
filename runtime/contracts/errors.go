@@ -35,4 +35,7 @@ var (
 
 	// Input validation errors
 	ErrInvalidInput = errors.New("invalid input: nil or malformed")
+
+	// Orchestration errors
+	ErrDeadlock = errors.New("no progress possible: deadlock detected")
 )

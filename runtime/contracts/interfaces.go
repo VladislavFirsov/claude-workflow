@@ -1,5 +1,7 @@
 package contracts
 
+import "context"
+
 // =============================================================================
 // Orchestration Interfaces
 // =============================================================================
@@ -25,7 +27,8 @@ type DependencyResolver interface {
 // ParallelExecutor executes tasks with bounded concurrency.
 type ParallelExecutor interface {
 	// Execute runs a task and returns its result.
-	Execute(run *Run, taskID TaskID) (*TaskResult, error)
+	// ctx is used for cancellation support.
+	Execute(ctx context.Context, run *Run, taskID TaskID) (*TaskResult, error)
 }
 
 // QueueManager manages the queue of tasks ready for execution.

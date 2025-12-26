@@ -7,7 +7,7 @@ import (
 	"github.com/anthropics/claude-workflow/runtime/contracts"
 )
 
-func TestUsageTracker_Add_SingleRun(t *testing.T) {
+func TestUsageTracker_Add_UpdatesRunUsage(t *testing.T) {
 	ut := NewUsageTracker()
 	run := &contracts.Run{ID: "run-1"}
 
@@ -21,92 +21,58 @@ func TestUsageTracker_Add_SingleRun(t *testing.T) {
 
 	ut.Add(run, usage)
 
-	snapshot := ut.Snapshot(run)
-	if snapshot.Tokens != 1000 {
-		t.Errorf("Snapshot() tokens = %d, want 1000", snapshot.Tokens)
+	// Verify run.Usage.Tokens is updated
+	if run.Usage.Tokens != 1000 {
+		t.Errorf("run.Usage.Tokens = %d, want 1000", run.Usage.Tokens)
 	}
-	if snapshot.Cost.Amount != 1.50 {
-		t.Errorf("Snapshot() cost amount = %v, want 1.50", snapshot.Cost.Amount)
-	}
-	if snapshot.Cost.Currency != "USD" {
-		t.Errorf("Snapshot() currency = %s, want USD", snapshot.Cost.Currency)
+
+	// Cost is NOT updated by UsageTracker (BudgetEnforcer.Record handles that)
+	if run.Usage.Cost.Amount != 0 {
+		t.Errorf("run.Usage.Cost.Amount = %v, want 0 (not updated by UsageTracker)", run.Usage.Cost.Amount)
 	}
 }
 
-func TestUsageTracker_Add_Accumulation(t *testing.T) {
+func TestUsageTracker_Add_TokensAccumulation(t *testing.T) {
 	ut := NewUsageTracker()
 	run := &contracts.Run{ID: "run-1"}
 
 	// First add
-	ut.Add(run, contracts.Usage{
-		Tokens: 500,
-		Cost: contracts.Cost{
-			Amount:   0.75,
-			Currency: "USD",
-		},
-	})
+	ut.Add(run, contracts.Usage{Tokens: 500})
 
 	// Second add
-	ut.Add(run, contracts.Usage{
-		Tokens: 300,
-		Cost: contracts.Cost{
-			Amount:   0.45,
-			Currency: "USD",
-		},
-	})
+	ut.Add(run, contracts.Usage{Tokens: 300})
 
 	// Third add
-	ut.Add(run, contracts.Usage{
-		Tokens: 200,
-		Cost: contracts.Cost{
-			Amount:   0.30,
-			Currency: "USD",
-		},
-	})
+	ut.Add(run, contracts.Usage{Tokens: 200})
 
-	snapshot := ut.Snapshot(run)
-	if snapshot.Tokens != 1000 {
-		t.Errorf("Snapshot() tokens = %d, want 1000", snapshot.Tokens)
-	}
-	if snapshot.Cost.Amount != 1.50 {
-		t.Errorf("Snapshot() cost amount = %v, want 1.50", snapshot.Cost.Amount)
+	if run.Usage.Tokens != 1000 {
+		t.Errorf("run.Usage.Tokens = %d, want 1000", run.Usage.Tokens)
 	}
 }
 
-func TestUsageTracker_Add_MultipleRuns(t *testing.T) {
+func TestUsageTracker_Snapshot_ReturnsRunUsage(t *testing.T) {
 	ut := NewUsageTracker()
-
-	run1 := &contracts.Run{ID: "run-1"}
-	run2 := &contracts.Run{ID: "run-2"}
-	run3 := &contracts.Run{ID: "run-3"}
-
-	ut.Add(run1, contracts.Usage{
-		Tokens: 1000,
-		Cost:   contracts.Cost{Amount: 1.0, Currency: "USD"},
-	})
-
-	ut.Add(run2, contracts.Usage{
-		Tokens: 2000,
-		Cost:   contracts.Cost{Amount: 2.0, Currency: "USD"},
-	})
-
-	ut.Add(run3, contracts.Usage{
-		Tokens: 3000,
-		Cost:   contracts.Cost{Amount: 3.0, Currency: "USD"},
-	})
-
-	snapshot1 := ut.Snapshot(run1)
-	snapshot2 := ut.Snapshot(run2)
-	snapshot3 := ut.Snapshot(run3)
-
-	if snapshot1.Tokens != 1000 {
-		t.Errorf("run1 tokens = %d, want 1000", snapshot1.Tokens)
+	run := &contracts.Run{
+		ID: "run-1",
+		Usage: contracts.Usage{
+			Tokens: 500,
+			Cost: contracts.Cost{
+				Amount:   0.75,
+				Currency: "USD",
+			},
+		},
 	}
-	if snapshot2.Tokens != 2000 {
-		t.Errorf("run2 tokens = %d, want 2000", snapshot2.Tokens)
+
+	snapshot := ut.Snapshot(run)
+
+	if snapshot.Tokens != 500 {
+		t.Errorf("Snapshot().Tokens = %d, want 500", snapshot.Tokens)
 	}
-	if snapshot3.Tokens != 3000 {
-		t.Errorf("run3 tokens = %d, want 3000", snapshot3.Tokens)
+	if snapshot.Cost.Amount != 0.75 {
+		t.Errorf("Snapshot().Cost.Amount = %v, want 0.75", snapshot.Cost.Amount)
+	}
+	if snapshot.Cost.Currency != "USD" {
+		t.Errorf("Snapshot().Cost.Currency = %s, want USD", snapshot.Cost.Currency)
 	}
 }
 
@@ -114,69 +80,26 @@ func TestUsageTracker_Snapshot_ZeroUsage(t *testing.T) {
 	ut := NewUsageTracker()
 	run := &contracts.Run{ID: "run-1"}
 
-	// Snapshot before any add
 	snapshot := ut.Snapshot(run)
 
 	if snapshot.Tokens != 0 {
-		t.Errorf("Snapshot() tokens = %d, want 0", snapshot.Tokens)
+		t.Errorf("Snapshot().Tokens = %d, want 0", snapshot.Tokens)
 	}
 	if snapshot.Cost.Amount != 0 {
-		t.Errorf("Snapshot() cost amount = %v, want 0", snapshot.Cost.Amount)
+		t.Errorf("Snapshot().Cost.Amount = %v, want 0", snapshot.Cost.Amount)
 	}
-	if snapshot.Cost.Currency != "" {
-		t.Errorf("Snapshot() currency = %s, want empty string", snapshot.Cost.Currency)
-	}
-}
-
-func TestUsageTracker_Snapshot_ReturnssCopy(t *testing.T) {
-	ut := NewUsageTracker()
-	run := &contracts.Run{ID: "run-1"}
-
-	usage := contracts.Usage{
-		Tokens: 1000,
-		Cost: contracts.Cost{
-			Amount:   1.50,
-			Currency: "USD",
-		},
-	}
-
-	ut.Add(run, usage)
-
-	snapshot1 := ut.Snapshot(run)
-	snapshot2 := ut.Snapshot(run)
-
-	// Verify they have the same values
-	if snapshot1.Tokens != snapshot2.Tokens {
-		t.Errorf("snapshot1 tokens %d != snapshot2 tokens %d", snapshot1.Tokens, snapshot2.Tokens)
-	}
-	if snapshot1.Cost.Amount != snapshot2.Cost.Amount {
-		t.Errorf("snapshot1 amount %v != snapshot2 amount %v", snapshot1.Cost.Amount, snapshot2.Cost.Amount)
-	}
-
-	// Snapshots should be independent copies (modifying one shouldn't affect the other)
-	// Note: Since Usage contains a Cost struct (not pointer), modifying snapshot1.Cost.Amount
-	// doesn't affect snapshot2, confirming it's a copy
 }
 
 func TestUsageTracker_Add_NilRun(t *testing.T) {
 	ut := NewUsageTracker()
 
 	// Should not panic when adding to nil run
-	ut.Add(nil, contracts.Usage{
-		Tokens: 1000,
-		Cost: contracts.Cost{
-			Amount:   1.0,
-			Currency: "USD",
-		},
-	})
+	ut.Add(nil, contracts.Usage{Tokens: 1000})
 
 	// Should not panic when snapshotting nil run
 	snapshot := ut.Snapshot(nil)
 	if snapshot.Tokens != 0 {
-		t.Errorf("Snapshot(nil) tokens = %d, want 0", snapshot.Tokens)
-	}
-	if snapshot.Cost.Amount != 0 {
-		t.Errorf("Snapshot(nil) cost amount = %v, want 0", snapshot.Cost.Amount)
+		t.Errorf("Snapshot(nil).Tokens = %d, want 0", snapshot.Tokens)
 	}
 }
 
@@ -190,25 +113,13 @@ func TestUsageTracker_Concurrent_Add(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ut.Add(run, contracts.Usage{
-				Tokens: 10,
-				Cost: contracts.Cost{
-					Amount:   0.01,
-					Currency: "USD",
-				},
-			})
+			ut.Add(run, contracts.Usage{Tokens: 10})
 		}()
 	}
 	wg.Wait()
 
-	snapshot := ut.Snapshot(run)
-	if snapshot.Tokens != 1000 {
-		t.Errorf("Snapshot() tokens = %d, want 1000", snapshot.Tokens)
-	}
-	// Use approximate comparison for floating point
-	epsilon := 1e-9
-	if snapshot.Cost.Amount < 1.0-epsilon || snapshot.Cost.Amount > 1.0+epsilon {
-		t.Errorf("Snapshot() cost amount = %v, want ~1.0", snapshot.Cost.Amount)
+	if run.Usage.Tokens != 1000 {
+		t.Errorf("run.Usage.Tokens = %d, want 1000", run.Usage.Tokens)
 	}
 }
 
@@ -223,13 +134,7 @@ func TestUsageTracker_Concurrent_AddAndSnapshot(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			ut.Add(run, contracts.Usage{
-				Tokens: 10,
-				Cost: contracts.Cost{
-					Amount:   0.01,
-					Currency: "USD",
-				},
-			})
+			ut.Add(run, contracts.Usage{Tokens: 10})
 		}()
 
 		go func() {
@@ -239,135 +144,25 @@ func TestUsageTracker_Concurrent_AddAndSnapshot(t *testing.T) {
 	}
 	wg.Wait()
 
-	snapshot := ut.Snapshot(run)
-	if snapshot.Tokens != 500 {
-		t.Errorf("Snapshot() tokens = %d, want 500", snapshot.Tokens)
-	}
-	// Use approximate comparison for floating point
-	epsilon := 1e-9
-	if snapshot.Cost.Amount < 0.5-epsilon || snapshot.Cost.Amount > 0.5+epsilon {
-		t.Errorf("Snapshot() cost amount = %v, want ~0.5", snapshot.Cost.Amount)
+	if run.Usage.Tokens != 500 {
+		t.Errorf("run.Usage.Tokens = %d, want 500", run.Usage.Tokens)
 	}
 }
 
-func TestUsageTracker_Concurrent_MultipleRuns(t *testing.T) {
+func TestUsageTracker_MultipleRuns_Independent(t *testing.T) {
 	ut := NewUsageTracker()
-	var wg sync.WaitGroup
 
-	// Concurrent operations on different runs
-	for runIdx := 0; runIdx < 10; runIdx++ {
-		runID := contracts.RunID("run-" + string(rune('0'+runIdx)))
-		run := &contracts.Run{ID: runID}
+	run1 := &contracts.Run{ID: "run-1"}
+	run2 := &contracts.Run{ID: "run-2"}
 
-		for i := 0; i < 10; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				ut.Add(run, contracts.Usage{
-					Tokens: 100,
-					Cost: contracts.Cost{
-						Amount:   0.1,
-						Currency: "USD",
-					},
-				})
-			}()
-		}
+	ut.Add(run1, contracts.Usage{Tokens: 1000})
+	ut.Add(run2, contracts.Usage{Tokens: 2000})
+
+	if run1.Usage.Tokens != 1000 {
+		t.Errorf("run1.Usage.Tokens = %d, want 1000", run1.Usage.Tokens)
 	}
-	wg.Wait()
-
-	// Verify each run accumulated 1000 tokens
-	epsilon := 1e-9
-	for runIdx := 0; runIdx < 10; runIdx++ {
-		runID := contracts.RunID("run-" + string(rune('0'+runIdx)))
-		run := &contracts.Run{ID: runID}
-		snapshot := ut.Snapshot(run)
-		if snapshot.Tokens != 1000 {
-			t.Errorf("run %s tokens = %d, want 1000", runID, snapshot.Tokens)
-		}
-		if snapshot.Cost.Amount < 1.0-epsilon || snapshot.Cost.Amount > 1.0+epsilon {
-			t.Errorf("run %s cost amount = %v, want ~1.0", runID, snapshot.Cost.Amount)
-		}
-	}
-}
-
-func TestUsageTracker_CurrencyPreservation(t *testing.T) {
-	ut := NewUsageTracker()
-	run := &contracts.Run{ID: "run-1"}
-
-	// First add establishes currency
-	ut.Add(run, contracts.Usage{
-		Tokens: 1000,
-		Cost: contracts.Cost{
-			Amount:   1.0,
-			Currency: "USD",
-		},
-	})
-
-	// Second add with same currency
-	ut.Add(run, contracts.Usage{
-		Tokens: 500,
-		Cost: contracts.Cost{
-			Amount:   0.5,
-			Currency: "USD",
-		},
-	})
-
-	snapshot := ut.Snapshot(run)
-	if snapshot.Cost.Currency != "USD" {
-		t.Errorf("Snapshot() currency = %s, want USD", snapshot.Cost.Currency)
-	}
-}
-
-func TestUsageTracker_CurrencyFromSecondAdd(t *testing.T) {
-	ut := NewUsageTracker()
-	run := &contracts.Run{ID: "run-1"}
-
-	// First add with no currency
-	ut.Add(run, contracts.Usage{
-		Tokens: 1000,
-		Cost: contracts.Cost{
-			Amount:   1.0,
-			Currency: "",
-		},
-	})
-
-	// Second add establishes currency
-	ut.Add(run, contracts.Usage{
-		Tokens: 500,
-		Cost: contracts.Cost{
-			Amount:   0.5,
-			Currency: "EUR",
-		},
-	})
-
-	snapshot := ut.Snapshot(run)
-	if snapshot.Cost.Currency != "EUR" {
-		t.Errorf("Snapshot() currency = %s, want EUR", snapshot.Cost.Currency)
-	}
-}
-
-func TestUsageTracker_ZeroCostUsage(t *testing.T) {
-	ut := NewUsageTracker()
-	run := &contracts.Run{ID: "run-1"}
-
-	// Add usage with zero cost
-	ut.Add(run, contracts.Usage{
-		Tokens: 1000,
-		Cost: contracts.Cost{
-			Amount:   0.0,
-			Currency: "USD",
-		},
-	})
-
-	snapshot := ut.Snapshot(run)
-	if snapshot.Tokens != 1000 {
-		t.Errorf("Snapshot() tokens = %d, want 1000", snapshot.Tokens)
-	}
-	if snapshot.Cost.Amount != 0.0 {
-		t.Errorf("Snapshot() cost amount = %v, want 0.0", snapshot.Cost.Amount)
-	}
-	if snapshot.Cost.Currency != "USD" {
-		t.Errorf("Snapshot() currency = %s, want USD", snapshot.Cost.Currency)
+	if run2.Usage.Tokens != 2000 {
+		t.Errorf("run2.Usage.Tokens = %d, want 2000", run2.Usage.Tokens)
 	}
 }
 
@@ -375,47 +170,42 @@ func TestUsageTracker_LargeTokenCounts(t *testing.T) {
 	ut := NewUsageTracker()
 	run := &contracts.Run{ID: "run-1"}
 
-	// Add large token counts (avoiding overflow)
-	// Max int64 = 9,223,372,036,854,775,807
-	// Using a safe large value instead
 	largeToken := contracts.TokenCount(1_000_000_000_000) // 1 trillion
 
-	ut.Add(run, contracts.Usage{
-		Tokens: largeToken / 2,
-		Cost: contracts.Cost{
-			Amount:   1.0,
-			Currency: "USD",
-		},
-	})
+	ut.Add(run, contracts.Usage{Tokens: largeToken / 2})
+	ut.Add(run, contracts.Usage{Tokens: largeToken / 2})
 
-	ut.Add(run, contracts.Usage{
-		Tokens: largeToken / 2,
-		Cost: contracts.Cost{
-			Amount:   1.0,
-			Currency: "USD",
-		},
-	})
-
-	snapshot := ut.Snapshot(run)
-	if snapshot.Tokens != largeToken {
-		t.Errorf("Snapshot() tokens = %d, want %d", snapshot.Tokens, largeToken)
+	if run.Usage.Tokens != largeToken {
+		t.Errorf("run.Usage.Tokens = %d, want %d", run.Usage.Tokens, largeToken)
 	}
 }
 
-func TestUsageTracker_EmptyRunID(t *testing.T) {
+func TestUsageTracker_DoesNotUpdateCost(t *testing.T) {
 	ut := NewUsageTracker()
-	run := &contracts.Run{ID: ""}
+	run := &contracts.Run{ID: "run-1"}
 
+	// Set initial cost (simulating BudgetEnforcer.Record)
+	run.Usage.Cost = contracts.Cost{Amount: 5.0, Currency: "USD"}
+
+	// Add usage with different cost
 	ut.Add(run, contracts.Usage{
 		Tokens: 1000,
 		Cost: contracts.Cost{
-			Amount:   1.0,
-			Currency: "USD",
+			Amount:   1.0, // This should be ignored
+			Currency: "EUR",
 		},
 	})
 
-	snapshot := ut.Snapshot(run)
-	if snapshot.Tokens != 1000 {
-		t.Errorf("Snapshot() tokens = %d, want 1000", snapshot.Tokens)
+	// Tokens should be updated
+	if run.Usage.Tokens != 1000 {
+		t.Errorf("run.Usage.Tokens = %d, want 1000", run.Usage.Tokens)
+	}
+
+	// Cost should remain unchanged (not overwritten by Add)
+	if run.Usage.Cost.Amount != 5.0 {
+		t.Errorf("run.Usage.Cost.Amount = %v, want 5.0 (unchanged)", run.Usage.Cost.Amount)
+	}
+	if run.Usage.Cost.Currency != "USD" {
+		t.Errorf("run.Usage.Cost.Currency = %s, want USD (unchanged)", run.Usage.Cost.Currency)
 	}
 }
