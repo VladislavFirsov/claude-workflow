@@ -6,6 +6,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Claude Sub-Agent Spec Workflow System - A comprehensive AI-driven development workflow system built on Claude Code's Sub-Agents feature. This system transforms project ideas into production-ready code through specialized AI agents working in coordinated phases.
 
+## Runtime Layer (Go)
+
+A sidecar runtime for LLM agent orchestration with cost control and context management.
+
+**Quick Reference:**
+- **Status**: See `runtime/STATUS.md` for current state and next steps
+- **Design**: See `docs/2025_12_26/design/runtime-layer-v1-draft.md`
+- **Components**: See `runtime/manifest.json`
+
+**Key Directories:**
+```
+runtime/
+├── contracts/           # Interfaces, types, errors
+├── internal/
+│   ├── orchestration/   # Scheduler, Executor, Orchestrator
+│   ├── cost/            # TokenEstimator, BudgetEnforcer, ModelCatalog
+│   └── context/         # ContextBuilder, Compactor, Router
+└── STATUS.md            # Current status and TODO
+```
+
+**Run Tests:**
+```bash
+cd runtime && go test ./... -v
+```
+
 ## Project Documentation Conventions (Important)
 
 **Documentation Files:** All new documentation or task files must be saved under the `docs/` folder in this repository.For example:

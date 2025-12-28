@@ -280,6 +280,8 @@ type RunPolicy struct {
   and a stub executor in `runtime/internal/orchestration/orchestrator_integration_test.go`.
 - Scenarios covered: linear DAG, fan-in, diamond, single/empty DAG, context routing,
   budget enforcement, task failure, and context cancellation.
+- Factory/DI helper tests cover defaults, custom catalog/currency, and minimal E2E flows
+  in `runtime/internal/orchestration/factory_test.go`.
 
 ## Open Questions
 - Policy surface: which knobs are exposed in v1 (timeouts, max parallelism)?

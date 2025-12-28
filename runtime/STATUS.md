@@ -1,7 +1,7 @@
 # Runtime Layer — Project Status
 
 > **Last Updated:** 2025-12-28
-> **Status:** Core Complete, E2E Integration Tests Done
+> **Status:** Core Complete, Factory Helper Done
 
 ## Quick Start for New Session
 
@@ -47,14 +47,17 @@ go test ./... -v
   - Context routing verification
   - Budget enforcement with deterministic token calculation
   - Task failure and context cancellation handling
+- **Factory/DI helper** (`factory.go`) — unified orchestrator assembly:
+  - `NewOrchestratorWithDefaults(policy, executor)` — simple API
+  - `NewOrchestratorWithOptions(policy, executor, opts)` — custom ModelCatalog/Currency
+  - 6 tests including single-task and multi-task E2E
 
 ### Next
-1. Factory/DI helper (`NewOrchestratorWithDefaults`).
-2. HTTP API surface (StartRun, EnqueueTask, GetStatus, AbortRun).
-3. Config system for ModelCatalog + policies (YAML/JSON).
-4. LangChain adapter (Python SDK).
-5. Observability (logs, metrics, tracing).
-6. CLI for local runs and debugging.
+1. HTTP API surface (StartRun, EnqueueTask, GetStatus, AbortRun).
+2. Config system for ModelCatalog + policies (YAML/JSON).
+3. LangChain adapter (Python SDK).
+4. Observability (logs, metrics, tracing).
+5. CLI for local runs and debugging.
 
 ---
 
@@ -139,20 +142,30 @@ Key implementation details:
 - Token calculation accounts for context routing (A=100, B=102, C=102 tokens)
 ```
 
-### 2. Factory Function
+### 2. Factory Function ✅ DONE
 ```go
 // File: internal/orchestration/factory.go
 
+// Simple API - uses all defaults
 func NewOrchestratorWithDefaults(
     policy contracts.RunPolicy,
     executor TaskExecutorFunc,
-) (contracts.Orchestrator, error)
+) contracts.Orchestrator
 
-// Creates orchestrator with all default components:
-// - Scheduler, DependencyResolver, QueueManager
-// - ParallelExecutor (from policy)
-// - ContextBuilder, ContextCompactor, ContextRouter
-// - TokenEstimator, CostCalculator, BudgetEnforcer, UsageTracker
+// Extended API - custom ModelCatalog/Currency
+func NewOrchestratorWithOptions(
+    policy contracts.RunPolicy,
+    executor TaskExecutorFunc,
+    opts FactoryOptions,
+) contracts.Orchestrator
+
+// Tests: 6 tests in factory_test.go
+// - TestNewOrchestratorWithDefaults
+// - TestNewOrchestratorWithDefaults_NilExecutor
+// - TestNewOrchestratorWithOptions_CustomCatalog
+// - TestNewOrchestratorWithOptions_CustomCurrencyOnly
+// - TestFactory_SingleTaskE2E
+// - TestFactory_MultiTaskE2E
 ```
 
 ### 3. (Future) HTTP API

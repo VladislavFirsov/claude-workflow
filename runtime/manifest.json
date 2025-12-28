@@ -9,6 +9,9 @@
   "integration_tests": [
     "internal/orchestration/orchestrator_integration_test.go"
   ],
+  "helpers": [
+    "internal/orchestration/factory.go"
+  ],
   "components": [
     {
       "name": "TokenEstimator",
