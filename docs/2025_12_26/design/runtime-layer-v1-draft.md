@@ -275,6 +275,12 @@ type RunPolicy struct {
 - Risk: context compaction loses critical info.
   - Mitigation: deterministic rules + test fixtures per agent type.
 
+## Testing (Current)
+- E2E integration tests for Orchestrator are implemented with real components
+  and a stub executor in `runtime/internal/orchestration/orchestrator_integration_test.go`.
+- Scenarios covered: linear DAG, fan-in, diamond, single/empty DAG, context routing,
+  budget enforcement, task failure, and context cancellation.
+
 ## Open Questions
 - Policy surface: which knobs are exposed in v1 (timeouts, max parallelism)?
 - Budget granularity: per run vs per task?

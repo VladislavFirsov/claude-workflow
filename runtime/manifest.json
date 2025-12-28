@@ -6,6 +6,9 @@
     "tier2_coverage": 90,
     "tier3_coverage": 95
   },
+  "integration_tests": [
+    "internal/orchestration/orchestrator_integration_test.go"
+  ],
   "components": [
     {
       "name": "TokenEstimator",
