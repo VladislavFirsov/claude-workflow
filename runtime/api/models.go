@@ -26,10 +26,10 @@ type PolicyDTO struct {
 
 // ContextPolicyDTO represents context management settings.
 type ContextPolicyDTO struct {
-	MaxTokens  int64  `json:"max_tokens,omitempty"`
-	Strategy   string `json:"strategy,omitempty"`
-	KeepLastN  int    `json:"keep_last_n,omitempty"`
-	TruncateTo int64  `json:"truncate_to,omitempty"`
+	MaxTokens int64  `json:"max_tokens,omitempty"`
+	Strategy  string `json:"strategy,omitempty"`
+	KeepLastN int    `json:"keep_last_n,omitempty"`
+	// truncate_to removed - out of scope V1
 }
 
 // TaskDTO represents a task in the request.
@@ -98,10 +98,9 @@ func (p *PolicyDTO) ToRunPolicy() contracts.RunPolicy {
 	}
 	if p.ContextPolicy != nil {
 		policy.ContextPolicy = contracts.ContextPolicy{
-			MaxTokens:  contracts.TokenCount(p.ContextPolicy.MaxTokens),
-			Strategy:   p.ContextPolicy.Strategy,
-			KeepLastN:  p.ContextPolicy.KeepLastN,
-			TruncateTo: contracts.TokenCount(p.ContextPolicy.TruncateTo),
+			MaxTokens: contracts.TokenCount(p.ContextPolicy.MaxTokens),
+			Strategy:  p.ContextPolicy.Strategy,
+			KeepLastN: p.ContextPolicy.KeepLastN,
 		}
 	}
 	return policy

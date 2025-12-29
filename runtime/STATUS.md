@@ -143,80 +143,35 @@ runtime/cmd/sidecar/
 
 ---
 
-## Next Steps (TODO)
+## Next Steps (TODO) — Updated Plan
 
-### 1. E2E Integration Test ✅ DONE
-```
-File: internal/orchestration/orchestrator_integration_test.go
+Aligned with `CLAUDE.md` and latest decisions:
+- Workflow is a thin client of runtime (integrate now).
+- Deterministic DAG scheduling with batched execution.
+- Reproducibility prioritized over throughput.
 
-Tests (9 total):
-- TestIntegration_LinearDAG_ABC     # A → B → C, context routing
-- TestIntegration_FanInDAG          # A,B → C (parallel)
-- TestIntegration_DiamondDAG        # A → B,C → D
-- TestIntegration_SingleTask        # Single task
-- TestIntegration_EmptyDAG          # No tasks
-- TestIntegration_ContextRouting    # Verify Inputs.Inputs[depID]
-- TestIntegration_BudgetExceeded    # Deterministic budget test
-- TestIntegration_TaskFailure       # B fails → RunFailed
-- TestIntegration_ContextCancellation # Cancel → ErrTaskCancelled
+### 1. Deterministic batched scheduling (core execution semantics)
+- Orchestrator executes DAG in deterministic batches (topologically ready set sorted by TaskID).
+- No worker pool; each batch runs concurrently up to policy.MaxParallelism, then waits for completion.
+- Preserve reproducibility: stable ordering, deterministic merge of results/errors.
+- Update tests to cover batched semantics and ordering invariants.
 
-Key implementation details:
-- Uses real components (Scheduler, ContextBuilder, BudgetEnforcer, etc.)
-- Only ParallelExecutor uses stub (via NewParallelExecutorFromPolicy)
-- DAG built through DependencyResolver.BuildDAG (not manual)
-- Token calculation accounts for context routing (A=100, B=102, C=102 tokens)
-```
+### 2. State consistency on all error paths
+- Ensure task state + error are set for any failure after execution (budget record, routing, scheduler).
+- Ensure RunStore shadow state reflects final task failures for accurate API snapshots.
 
-### 2. Factory Function ✅ DONE
-```go
-// File: internal/orchestration/factory.go
+### 3. Cancellation and timeout responsiveness
+- Make executor wait for concurrency slot respect ctx cancellation (no blocking on sem forever).
+- Fix RunStore.WaitAll to wait for any completion, not just the first channel.
 
-// Simple API - uses all defaults
-func NewOrchestratorWithDefaults(
-    policy contracts.RunPolicy,
-    executor TaskExecutorFunc,
-) contracts.Orchestrator
+### 4. Workflow → runtime integration (thin client)
+- Update workflow command(s) to submit runs to runtime HTTP API.
+- Keep workflow layer model-agnostic; runtime remains the execution authority.
+- Add minimal integration guide and example payloads.
 
-// Extended API - custom ModelCatalog/Currency
-func NewOrchestratorWithOptions(
-    policy contracts.RunPolicy,
-    executor TaskExecutorFunc,
-    opts FactoryOptions,
-) contracts.Orchestrator
-
-// Tests: 6 tests in factory_test.go
-// - TestNewOrchestratorWithDefaults
-// - TestNewOrchestratorWithDefaults_NilExecutor
-// - TestNewOrchestratorWithOptions_CustomCatalog
-// - TestNewOrchestratorWithOptions_CustomCurrencyOnly
-// - TestFactory_SingleTaskE2E
-// - TestFactory_MultiTaskE2E
-```
-
-### 3. HTTP API ✅ DONE
-```
-Files:
-- api/models.go      # Request/Response DTOs
-- api/errors.go      # Error mapping to HTTP status codes
-- api/store.go       # In-memory RunStore with mutex
-- api/handlers.go    # HTTP handlers
-- api/server.go      # Server + http.ServeMux router (Go 1.22+)
-- api/server_test.go # 14 tests
-- cmd/sidecar/main.go # Entry point
-
-Endpoints:
-- POST /api/v1/runs           → StartRun (202)
-- GET  /api/v1/runs/{id}      → GetStatus (200)
-- POST /api/v1/runs/{id}/abort → AbortRun (200, fire-and-forget)
-- POST /api/v1/runs/{id}/tasks → EnqueueTask (501, V1 limitation)
-
-Key design:
-- Policy from request only (stateless API)
-- "aborting" is API-level state (not contracts.RunState)
-- Duplicate run ID → 409 Conflict
-- DAG cycle → 422 Unprocessable Entity
-- Budget exceeded → 422 (not 402)
-```
+### 5. Policy enforcement completeness
+- Implement ContextPolicy.TruncateTo or remove the field if out of scope.
+- Validate policy options and document supported strategies.
 
 ---
 

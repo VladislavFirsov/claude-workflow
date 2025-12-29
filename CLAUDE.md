@@ -1,247 +1,195 @@
-# CLAUDE.md
+# Architecture Intent: claude-workflow
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Назначение документа
 
-## Project Overview
+Этот документ фиксирует **архитектурный замысел проекта `claude-workflow`**:
+- зачем он создаётся;
+- какую фундаментальную проблему решает;
+- чем он должен стать со временем;
+- какие границы ответственности считаются инвариантными.
 
-Claude Sub-Agent Spec Workflow System - A comprehensive AI-driven development workflow system built on Claude Code's Sub-Agents feature. This system transforms project ideas into production-ready code through specialized AI agents working in coordinated phases.
+Документ предназначен для:
+- архитектора;
+- core-разработчиков runtime-слоя;
+- принятия решений о дальнейшем развитии проекта.
 
-## Runtime Layer (Go)
+Это **не документация по использованию** и **не продуктовый pitch**.
 
-A sidecar runtime for LLM agent orchestration with cost control and context management.
+---
 
-**Quick Reference:**
-- **Status**: See `runtime/STATUS.md` for current state and next steps
-- **Design**: See `docs/2025_12_26/design/runtime-layer-v1-draft.md`
-- **Components**: See `runtime/manifest.json`
+## 1. Что такое `claude-workflow` сейчас (фактическое состояние)
 
-**Key Directories:**
-```
-runtime/
-├── contracts/           # Interfaces, types, errors
-├── internal/
-│   ├── orchestration/   # Scheduler, Executor, Orchestrator
-│   ├── cost/            # TokenEstimator, BudgetEnforcer, ModelCatalog
-│   └── context/         # ContextBuilder, Compactor, Router
-└── STATUS.md            # Current status and TODO
-```
+`claude-workflow` — это **рабочий прототип (PoC с завершённым core)**, состоящий из двух логически связанных частей:
 
-**Run Tests:**
-```bash
-cd runtime && go test ./... -v
-```
+### 1. Workflow-слой (Claude Code)
+- Набор **sub-agents** (spec-analyst, spec-architect, spec-developer, validator и т.д.).
+- Формализованный workflow разработки:
+   - анализ → архитектура → реализация → валидация → тесты.
+- Реализован как **slash-command** для Claude Code.
+- Отвечает за *что делать и в каком порядке*.
 
-## Project Documentation Conventions (Important)
+### 2. Runtime-слой (Go sidecar)
+- Отдельный **runtime-sidecar сервис**.
+- Реализует:
+   - DAG и зависимости;
+   - планирование и параллельное исполнение;
+   - маршрутизацию контекста;
+   - учёт токенов и budget enforcement;
+   - HTTP API.
+- Core помечен как **Complete**, покрыт тестами.
+- Реальный вызов LLM/инструментов **инжектируется извне** (runtime не привязан к конкретной модели).
 
-**Documentation Files:** All new documentation or task files must be saved under the `docs/` folder in this repository.For example:
+Важно:
+> Проект **уже реализует ключевые архитектурные идеи**,  
+> но **ещё не является завершённым продуктом**.
 
-- **Tasks & TODOs**: Save in `docs/{YYYY_MM_DD}/tasks/` (e.g., `docs/t2025_08_08/asks/ReleaseTodo.md` for a release checklist).
-- **Requirements/Specs**: Save in `docs/{YYYY_MM_DD}/specs/` (e.g., `docs/2025_08_08/specs/AuthModuleRequirements.md`).
-- **Design Docs**: Save in `docs/{YYYY_MM_DD}/design/` (e.g., `docs/2025_08_08/design/ArchitectureOverview.md`).
-- **Code Files:** Follow the project structure (place new code in the appropriate src/module folder as discussed).
-- **Tests:** Put new test files under the `tests/` directory, mirroring the code structure.
+---
 
-> **Important:** When creating a new file, ensure the directory exists or create it. Never default to the root directory for these files.
+## 2. Почему этот проект вообще создаётся (ключевая причина)
 
-## Common Development Commands
+Проект не возник из идеи «сделать ещё один агентный фреймворк».
 
-### Workflow Execution
+Он возник из **структурной проблемы**, наблюдаемой на практике:
 
-```bash
-# Execute complete development workflow using slash command
-/agent-workflow "Create a todo list web application with user authentication"
+> LLM-системы очень быстро перестают быть “скриптами”  
+> и превращаются в **распределённые системы без runtime-дисциплины**.
 
-# Start workflow manually with orchestrator
-Use spec-orchestrator: Create an enterprise CRM system with multi-tenancy support
+### Симптомы проблемы
+- рост стоимости нелинеен и плохо объясним;
+- параллельные агенты дублируют контекст;
+- порядок выполнения влияет на результат;
+- поведение сложно воспроизвести;
+- человек становится “message bus” между агентами.
 
-# Phase-specific execution
-Use spec-analyst: Analyze requirements for an e-commerce platform
-Use spec-architect: Design system architecture for microservices
-Use spec-developer: Implement user authentication based on specifications
-```
+Эта проблема:
+- **не решается промтами**;
+- **не решается best practices**;
+- **не решается на уровне workflow-DSL**.
 
-### Quality Gates and Testing
+Это **runtime-проблема**, а не проблема логики.
 
-```bash
-# The system includes three automated quality gates:
-# Gate 1: Planning Quality (95% threshold) - After spec-planner
-# Gate 2: Development Quality (80% threshold) - After spec-tester  
-# Gate 3: Production Readiness (85% threshold) - After spec-validator
+---
 
-# Manual validation
-Use spec-validator: Evaluate code quality and provide scoring
-Use spec-tester: Generate comprehensive test suite for the implementation
-```
+## 3. Зачем существует `claude-workflow` (суть проекта)
 
-### Project Structure Operations
+### Короткая формулировка
 
-```bash
-# Copy agents to a new project
-mkdir -p .claude/agents .claude/commands
-cp agents/* .claude/agents/
-cp commands/agent-workflow.md .claude/commands/
+> `claude-workflow` существует, чтобы **отделить описание LLM-процесса  
+> от его исполнения** и сделать это исполнение **управляемым, предсказуемым и воспроизводимым**.
 
-# Organize agent files (current reorganization in progress)
-# Backend agents: agents/backend/
-# Frontend agents: agents/frontend/ 
-# Spec workflow agents: agents/spec-agents/
-# UI/UX agents: agents/ui-ux/
-# Utility agents: agents/utility/
-```
+---
 
-## System Architecture
+## 4. Что является ядром проекта (инвариант)
 
-### Multi-Phase Workflow Design
+### Архитектурный инвариант
 
-The system follows a three-phase approach with quality gates:
+`claude-workflow` — это **execution & governance runtime**, а не:
 
-1. **Planning Phase (20-25% of project time)**
-   - spec-analyst: Requirements analysis and user stories
-   - spec-architect: System architecture and API design
-   - spec-planner: Task breakdown and estimation
-   - Quality Gate 1: 95% compliance threshold
+- UI;
+- SaaS;
+- агент “для пользователей”;
+- фреймворк для написания промтов.
 
-2. **Development Phase (60-65% of project time)**
-   - spec-developer: Code implementation following specifications
-   - spec-tester: Comprehensive test suite generation
-   - Quality Gate 2: 80% compliance threshold
+### Его фундаментальная функция
 
-3. **Validation Phase (15-20% of project time)**
-   - spec-reviewer: Code review and best practices validation
-   - spec-validator: Final production readiness assessment
-   - Quality Gate 3: 85% compliance threshold
+> **Быть runtime-слоем для сложных LLM-workflow,  
+> где execution — это управляемый ресурс.**
 
-### Agent Categories
+---
 
-**Workflow Agents (spec-agents/)**
+## 5. Граница ответственности проекта
 
-- spec-orchestrator: Workflow coordination and quality gate management
-- spec-analyst: Requirements analysis specialist
-- spec-architect: System architecture designer  
-- spec-planner: Task breakdown and planning
-- spec-developer: Implementation specialist
-- spec-tester: Testing expert
-- spec-reviewer: Code review specialist
-- spec-validator: Final validation expert
+### Проект ОТВЕЧАЕТ за:
+- оркестрацию шагов (DAG, зависимости);
+- параллельное исполнение;
+- маршрутизацию и изоляцию контекста;
+- учёт и ограничение стоимости;
+- execution-policy (что разрешено / запрещено);
+- воспроизводимость и аудит.
 
-**Domain Specialists**
+### Проект НЕ ОТВЕЧАЕТ за:
+- UX и интерфейсы;
+- бизнес-логику;
+- выбор LLM-провайдера;
+- качество генерации;
+- инструменты (IDE, GitHub, CI).
 
-- senior-frontend-architect: React/Vue/Next.js expert
-- senior-backend-architect: Go/TypeScript backend systems
-- ui-ux-master: UI/UX design and implementation
+Это жёсткая граница.  
+Нарушение её размывает проект.
 
-**Utility Agents**
+---
 
-- refactor-agent: Code quality and refactoring specialist
+## 6. Почему workflow-слой (sub-agents) важен, но не главный
 
-### Quality Framework
+Workflow-слой:
+- демонстрирует **реальный use-case**;
+- служит **dogfooding** для runtime;
+- позволяет проверять архитектурные гипотезы.
 
-Each phase includes automated quality gates with specific thresholds:
+Но стратегически:
 
-- Requirements completeness validation
-- Architecture feasibility assessment
-- Code quality metrics and test coverage
-- Security vulnerability scanning
-- Production deployment readiness
+> Workflow — **клиент runtime**,  
+> а runtime — **ценность проекта**.
 
-### Agent Communication Protocol
+---
 
-Agents communicate through structured artifacts:
+## 7. Во что проект должен эволюционировать
 
-- Each agent produces specific documentation (requirements.md, architecture.md, etc.)
-- Next agent uses previous outputs as input
-- Orchestrator manages the workflow progression
-- Quality gates ensure consistency and standards compliance
+### Целевое состояние (north star)
 
-## Expected Output Structure
+`claude-workflow` должен стать:
 
-```
-project/
-├── docs/
-│   ├── requirements.md      # Detailed requirements specification
-│   ├── architecture.md      # System architecture design
-│   ├── api-spec.md         # API specifications and contracts
-│   └── user-stories.md     # User stories with acceptance criteria
-├── src/
-│   ├── components/         # Reusable components
-│   ├── services/          # Business logic services
-│   ├── utils/             # Utility functions
-│   └── types/             # Type definitions
-├── tests/
-│   ├── unit/              # Unit tests
-│   ├── integration/       # Integration tests
-│   └── e2e/               # End-to-end tests
-├── package.json           # Project dependencies
-└── README.md              # Project documentation
-```
+> **универсальным runtime-sidecar’ом  
+> для сложных LLM-workflow и агентных систем**,  
+> независимо от конкретного фреймворка или модели.
 
-## Key Integration Points
+Характеристики:
+- self-hosted;
+- contracts-first;
+- model-agnostic;
+- workflow-agnostic;
+- ориентирован на команды, а не на одиночных пользователей.
 
-### Slash Command Integration
+---
 
-The `/agent-workflow` command provides one-command execution of the entire development pipeline:
+## 8. Как это связано с CLI-оркестрацией (Claude / Codex)
 
-- Supports quality threshold configuration (--quality=75-95)
-- Allows agent skipping (--skip-agent=spec-analyst)
-- Phase-specific execution (--phase=planning|development|validation)
-- Language selection (--language=zh|en)
+CLI-оркестрация:
+- не является отдельным продуктом;
+- является **частным случаем использования runtime**.
 
-### Sub-Agent Chain Process
+Текущий ручной процесс:
+- Claude пишет план и код;
+- Codex делает ревью;
+- человек маршрутизирует.
 
-The system uses Claude Code's sub-agent syntax for coordinated execution:
+Этот кейс:
+- идеально ложится на архитектуру runtime;
+- демонстрирует, зачем нужен execution-контроль;
+- служит проверкой, что runtime работает вне API-мира.
 
-```
-First use the spec-analyst sub agent → then spec-architect sub agent → then spec-developer sub agent → then spec-validator sub agent → quality gate decision → if score ≥95% continue to spec-tester, otherwise loop back with feedback
-```
+---
 
-### Quality Gate Mechanism
+## 9. Критерии архитектурного успеха проекта
 
-- Validation Score ≥95%: Proceed to next phase
-- Validation Score <95%: Loop back with specific feedback
-- Maximum 3 iterations to prevent infinite loops
-- Expected progression: Round 1 (80-90%) → Round 2 (90-95%) → Round 3 (95%+)
+Проект движется в правильном направлении, если:
 
-## Best Practices
+- runtime можно использовать без Claude Code;
+- workflow можно переписать, не меняя runtime;
+- execution-policy задаётся явно и enforce’ится;
+- человек перестаёт быть message bus;
+- runtime остаётся простым и объяснимым.
 
-### For Working with Agents
+---
 
-- Start with spec-orchestrator for complete projects
-- Use domain specialists for specific expertise areas
-- Allow each agent to complete their phase before intervention
-- Trust the quality gate system for consistent standards
-- Review artifacts between phases for course correction
+## 10. Ключевая мысль для архитектора
 
-### For Project Setup
+> `claude-workflow` — это не про агентов.  
+> Это про **дисциплину исполнения LLM-процессов**.
 
-- Copy all agents and slash command to project's .claude directory
-- Provide clear project descriptions with constraints and requirements
-- Specify quality expectations (75% for prototypes, 95% for enterprise)
-- Include existing documentation when available
+Все архитектурные решения должны проверяться вопросом:
 
-### For Customization
+> *Помогает ли это сделать execution более управляемым,  
+> или это просто добавляет “умности”?*
 
-- Adjust quality thresholds based on project needs
-- Skip agents for simpler projects (e.g., skip spec-analyst if requirements exist)
-- Use phase-specific execution for targeted improvements
-- Integrate with existing CI/CD workflows
-
-## Troubleshooting
-
-### Common Issues
-
-- **Agent Not Found**: Verify agents are in correct .claude/agents directory
-- **Quality Gate Failures**: Review specific criteria, allow agents to revise work
-- **Workflow Stuck**: Check orchestrator status, restart from last checkpoint
-
-### Debug Mode
-
-Enable verbose logging by requesting: "Use spec-orchestrator with debug mode and show all agent interactions"
-
-## Integration with External Systems
-
-The system can be integrated with:
-
-- GitHub Actions for CI/CD validation
-- Custom quality gates and validation criteria  
-- Domain-specific workflows and specialized orchestrators
-- Existing development tools and frameworks
+Если второе — это вне цели проекта.

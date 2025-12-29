@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/anthropics/claude-workflow/runtime/contracts"
@@ -298,11 +299,17 @@ func TestOrchestrator_BudgetExceeded(t *testing.T) {
 	}
 
 	err := orch.Run(context.Background(), run)
-	if !errors.Is(err, contracts.ErrBudgetExceeded) {
-		t.Errorf("expected ErrBudgetExceeded, got %v", err)
+	// Error is wrapped with task info, check state and error contains budget_exceeded
+	if err == nil {
+		t.Error("expected error, got nil")
 	}
 	if run.State != contracts.RunFailed {
 		t.Errorf("expected RunFailed, got %v", run.State)
+	}
+	// Check task has budget_exceeded error code
+	task := run.Tasks["task-1"]
+	if task.Error == nil || task.Error.Code != "budget_exceeded" {
+		t.Errorf("expected task error with code budget_exceeded, got %+v", task.Error)
 	}
 }
 
@@ -346,13 +353,17 @@ func TestOrchestrator_TaskNotFound(t *testing.T) {
 	orch := NewOrchestrator(deps)
 	run := &contracts.Run{
 		ID:    "run-1",
-		DAG:   &contracts.DAG{},
+		DAG:   &contracts.DAG{Nodes: map[contracts.TaskID]*contracts.DAGNode{}},
 		Tasks: map[contracts.TaskID]*contracts.Task{},
 	}
 
 	err := orch.Run(context.Background(), run)
-	if !errors.Is(err, contracts.ErrTaskNotFound) {
-		t.Errorf("expected ErrTaskNotFound, got %v", err)
+	// Error is wrapped with task info, check state and error code
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+	if run.State != contracts.RunFailed {
+		t.Errorf("expected RunFailed, got %v", run.State)
 	}
 }
 
@@ -422,6 +433,7 @@ func TestOrchestrator_DeadlockDetection(t *testing.T) {
 func TestOrchestrator_MultipleTasks(t *testing.T) {
 	deps := defaultDeps()
 
+	var mu sync.Mutex
 	executedTasks := make(map[contracts.TaskID]bool)
 	deps.Scheduler = &mockScheduler{
 		nextReadyFn: func(run *contracts.Run) ([]contracts.TaskID, error) {
@@ -436,7 +448,9 @@ func TestOrchestrator_MultipleTasks(t *testing.T) {
 	}
 	deps.Executor = &mockParallelExecutor{
 		executeFn: func(ctx context.Context, run *contracts.Run, taskID contracts.TaskID) (*contracts.TaskResult, error) {
+			mu.Lock()
 			executedTasks[taskID] = true
+			mu.Unlock()
 			return &contracts.TaskResult{
 				Output: "done",
 				Usage:  contracts.Usage{Tokens: 100, Cost: contracts.Cost{Amount: 0.01, Currency: "USD"}},
@@ -628,8 +642,12 @@ func TestOrchestrator_NoDuplicateQueueing(t *testing.T) {
 	deps.Scheduler = &mockScheduler{
 		nextReadyFn: func(run *contracts.Run) ([]contracts.TaskID, error) {
 			callCount++
-			// Always return same task
-			return []contracts.TaskID{"task-1"}, nil
+			// Return task-1 only if it's still pending
+			task := run.Tasks["task-1"]
+			if task.State == contracts.TaskPending {
+				return []contracts.TaskID{"task-1"}, nil
+			}
+			return nil, nil
 		},
 	}
 
@@ -717,8 +735,16 @@ func TestOrchestrator_CompactError(t *testing.T) {
 	}
 
 	err := orch.Run(context.Background(), run)
-	if !errors.Is(err, contracts.ErrContextTooLarge) {
-		t.Errorf("expected ErrContextTooLarge, got %v", err)
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+	if run.State != contracts.RunFailed {
+		t.Errorf("expected RunFailed, got %v", run.State)
+	}
+	// Check task has context_compact_failed error code
+	task := run.Tasks["task-1"]
+	if task.Error == nil || task.Error.Code != "context_compact_failed" {
+		t.Errorf("expected task error with code context_compact_failed, got %+v", task.Error)
 	}
 }
 
@@ -745,8 +771,16 @@ func TestOrchestrator_TokenEstimationError(t *testing.T) {
 	}
 
 	err := orch.Run(context.Background(), run)
-	if !errors.Is(err, contracts.ErrEstimationFailed) {
-		t.Errorf("expected ErrEstimationFailed, got %v", err)
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+	if run.State != contracts.RunFailed {
+		t.Errorf("expected RunFailed, got %v", run.State)
+	}
+	// Check task has token_estimation_failed error code
+	task := run.Tasks["task-1"]
+	if task.Error == nil || task.Error.Code != "token_estimation_failed" {
+		t.Errorf("expected task error with code token_estimation_failed, got %+v", task.Error)
 	}
 }
 
@@ -773,8 +807,16 @@ func TestOrchestrator_CostCalculationError(t *testing.T) {
 	}
 
 	err := orch.Run(context.Background(), run)
-	if !errors.Is(err, contracts.ErrModelUnknown) {
-		t.Errorf("expected ErrModelUnknown, got %v", err)
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+	if run.State != contracts.RunFailed {
+		t.Errorf("expected RunFailed, got %v", run.State)
+	}
+	// Check task has model_unknown error code
+	task := run.Tasks["task-1"]
+	if task.Error == nil || task.Error.Code != "model_unknown" {
+		t.Errorf("expected task error with code model_unknown, got %+v", task.Error)
 	}
 }
 

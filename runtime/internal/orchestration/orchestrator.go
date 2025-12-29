@@ -3,11 +3,14 @@ package orchestration
 import (
 	"context"
 	"fmt"
+	"sort"
+	"sync"
 
 	"github.com/anthropics/claude-workflow/runtime/contracts"
 )
 
-// orchestrator implements contracts.Orchestrator with the main execution loop.
+// orchestrator implements contracts.Orchestrator with batched execution loop.
+// Key design: parallel executor I/O, sequential deterministic merge.
 type orchestrator struct {
 	scheduler      contracts.Scheduler
 	depResolver    contracts.DependencyResolver
@@ -21,8 +24,8 @@ type orchestrator struct {
 	usageTracker   contracts.UsageTracker
 	router         contracts.ContextRouter
 
-	// queued tracks tasks already in queue to prevent duplicates
-	queued map[contracts.TaskID]struct{}
+	// onProgress is called after each successful batch merge (optional).
+	onProgress func(*contracts.Run)
 }
 
 // OrchestratorDeps contains all dependencies needed by the orchestrator.
@@ -54,26 +57,42 @@ func NewOrchestrator(deps OrchestratorDeps) contracts.Orchestrator {
 		budgetEnforcer: deps.BudgetEnforcer,
 		usageTracker:   deps.UsageTracker,
 		router:         deps.Router,
-		queued:         make(map[contracts.TaskID]struct{}),
 	}
 }
 
+// NewOrchestratorWithCallback creates an Orchestrator with progress callback.
+// The callback is called after each successful batch merge.
+func NewOrchestratorWithCallback(deps OrchestratorDeps, onProgress func(*contracts.Run)) contracts.Orchestrator {
+	o := NewOrchestrator(deps).(*orchestrator)
+	o.onProgress = onProgress
+	return o
+}
+
+// deniedResult contains info about a task denied in pre-check.
+type deniedResult struct {
+	taskID    contracts.TaskID
+	errorCode string
+	errorMsg  string
+	err       error // sentinel error for proper HTTP mapping
+}
+
+// batchResult contains the result of executing a single task in a batch.
+type batchResult struct {
+	taskID contracts.TaskID
+	result *contracts.TaskResult
+	err    error
+}
+
 // Run executes all tasks in the run according to the dependency graph.
+// Uses batched execution: parallel executor I/O, sequential deterministic merge.
+// Fail-fast: any task failure terminates the run immediately.
 func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
 	// Init
 	if err := o.init(run); err != nil {
 		return err
 	}
 
-	// Initial ready queue
-	if _, err := o.enqueueReady(run); err != nil {
-		run.State = contracts.RunFailed
-		return err
-	}
-
-	lastProgress := 0 // completed task count at last check
-
-	// Execute loop
+	// Main batched execution loop
 	for {
 		select {
 		case <-ctx.Done():
@@ -82,10 +101,17 @@ func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
 		default:
 		}
 
-		taskID, ok := o.queue.Dequeue()
-		if !ok {
-			// Check terminal
+		// 1. Get ready tasks (sorted by TaskID for determinism)
+		ready, err := o.scheduler.NextReady(run)
+		if err != nil {
+			run.State = contracts.RunFailed
+			return err
+		}
+
+		// 2. Check termination (all tasks terminal)
+		if len(ready) == 0 {
 			if o.allTerminal(run) {
+				// Check if any task failed - if so, run is failed
 				if o.hasFailures(run) {
 					run.State = contracts.RunFailed
 				} else {
@@ -93,27 +119,46 @@ func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
 				}
 				return nil
 			}
-
-			// Try to refill
-			added, err := o.enqueueReady(run)
-			if err != nil {
-				run.State = contracts.RunFailed
-				return err
-			}
-
-			// Deadlock detection: no tasks added and no progress
-			currentCompleted := o.countTerminal(run)
-			if added == 0 && currentCompleted == lastProgress {
-				run.State = contracts.RunFailed
-				return contracts.ErrDeadlock
-			}
-			lastProgress = currentCompleted
-			continue
+			// Unreachable if fail-fast works correctly
+			run.State = contracts.RunFailed
+			return contracts.ErrDeadlock
 		}
 
-		if err := o.executeTask(ctx, run, taskID); err != nil {
+		// 3. Pre-check budget SEQUENTIALLY (deterministic)
+		allowed, deniedResults := o.preCheckBudget(run, ready)
+
+		// 4. Handle denied tasks with fail-fast
+		if len(deniedResults) > 0 {
+			// Mark ALL denied tasks as failed for auditability
+			for _, dr := range deniedResults {
+				task, exists := run.Tasks[dr.taskID]
+				if exists {
+					task.State = contracts.TaskFailed
+					task.Error = &contracts.TaskError{
+						Code:    dr.errorCode,
+						Message: dr.errorMsg,
+					}
+				}
+			}
+			// Return error for first denied task (with sentinel wrapped)
+			dr := deniedResults[0]
+			run.State = contracts.RunFailed
+			return fmt.Errorf("task %s: %s: %w", dr.taskID, dr.errorMsg, dr.err)
+		}
+
+		// 5. Execute allowed batch (parallel executor calls, NO mutations except TaskRunning)
+		results := o.executeBatch(ctx, run, allowed)
+
+		// 6. Deterministic merge (sequential, sorted by TaskID)
+		// Returns error on first failure (fail-fast)
+		if err := o.mergeBatchResults(run, results); err != nil {
 			run.State = contracts.RunFailed
 			return err
+		}
+
+		// 7. Call progress callback if set
+		if o.onProgress != nil {
+			o.onProgress(run)
 		}
 	}
 }
@@ -131,107 +176,232 @@ func (o *orchestrator) init(run *contracts.Run) error {
 	return nil
 }
 
-// enqueueReady adds ready tasks to the queue, skipping already queued tasks.
-func (o *orchestrator) enqueueReady(run *contracts.Run) (int, error) {
-	ready, err := o.scheduler.NextReady(run)
-	if err != nil {
-		return 0, err
-	}
-	added := 0
-	for _, taskID := range ready {
-		if _, exists := o.queued[taskID]; exists {
-			continue // already in queue, skip
+// preCheckBudget checks budget SEQUENTIALLY for determinism.
+// Returns (allowed, denied) — denied contains detailed error codes.
+// Budget is "reserved" for allowed tasks to prevent over-commitment in batch.
+func (o *orchestrator) preCheckBudget(
+	run *contracts.Run,
+	taskIDs []contracts.TaskID,
+) (allowed []contracts.TaskID, denied []deniedResult) {
+	// Track reserved cost for this batch to prevent over-commitment
+	var reservedCost contracts.Cost
+
+	for _, tid := range taskIDs {
+		// Guard: validate task exists
+		task, exists := run.Tasks[tid]
+		if !exists {
+			denied = append(denied, deniedResult{
+				taskID:    tid,
+				errorCode: "task_not_found",
+				errorMsg:  fmt.Sprintf("task %s not found in run", tid),
+				err:       contracts.ErrTaskNotFound,
+			})
+			continue
 		}
-		o.queued[taskID] = struct{}{}
-		o.queue.Enqueue(taskID)
-		added++
+
+		// Build context for estimation
+		bundle, err := o.contextBuilder.Build(run, tid)
+		if err != nil {
+			denied = append(denied, deniedResult{
+				taskID:    tid,
+				errorCode: "context_build_failed",
+				errorMsg:  fmt.Sprintf("failed to build context: %v", err),
+				err:       err,
+			})
+			continue
+		}
+
+		// Compact context
+		compacted, err := o.compactor.Compact(bundle, run.Policy.ContextPolicy)
+		if err != nil {
+			denied = append(denied, deniedResult{
+				taskID:    tid,
+				errorCode: "context_compact_failed",
+				errorMsg:  fmt.Sprintf("failed to compact context: %v", err),
+				err:       err,
+			})
+			continue
+		}
+
+		// Estimate tokens
+		tokens, err := o.tokenEstimator.Estimate(task.Inputs, compacted)
+		if err != nil {
+			denied = append(denied, deniedResult{
+				taskID:    tid,
+				errorCode: "token_estimation_failed",
+				errorMsg:  fmt.Sprintf("failed to estimate tokens: %v", err),
+				err:       err,
+			})
+			continue
+		}
+
+		// Estimate cost
+		cost, err := o.costCalc.Estimate(tokens, task.Model)
+		if err != nil {
+			denied = append(denied, deniedResult{
+				taskID:    tid,
+				errorCode: "model_unknown",
+				errorMsg:  fmt.Sprintf("failed to estimate cost for model %s: %v", task.Model, err),
+				err:       err,
+			})
+			continue
+		}
+
+		// Pre-check budget INCLUDING already reserved cost for this batch
+		// This prevents over-commitment when multiple tasks pass Allow() individually
+		totalEstimate := contracts.Cost{
+			Amount:   cost.Amount + reservedCost.Amount,
+			Currency: cost.Currency,
+		}
+		if err := o.budgetEnforcer.Allow(run, totalEstimate); err != nil {
+			denied = append(denied, deniedResult{
+				taskID:    tid,
+				errorCode: "budget_exceeded",
+				errorMsg:  fmt.Sprintf("budget pre-check failed: %v", err),
+				err:       contracts.ErrBudgetExceeded,
+			})
+			continue
+		}
+
+		// Reserve this cost for subsequent checks in this batch
+		reservedCost.Amount += cost.Amount
+		if reservedCost.Currency == "" {
+			reservedCost.Currency = cost.Currency
+		}
+
+		allowed = append(allowed, tid)
 	}
-	return added, nil
+	return allowed, denied
 }
 
-// getTask safely retrieves a task from the run.
-func (o *orchestrator) getTask(run *contracts.Run, taskID contracts.TaskID) (*contracts.Task, error) {
-	if run.Tasks == nil {
-		return nil, contracts.ErrTaskNotFound
-	}
-	task, ok := run.Tasks[taskID]
-	if !ok || task == nil {
-		return nil, contracts.ErrTaskNotFound
-	}
-	return task, nil
-}
+// executeBatch executes tasks in parallel (executor I/O only).
+// Each goroutine sets task.State = TaskRunning (safe: each touches different task).
+// Returns results slice with same indices as input taskIDs.
+func (o *orchestrator) executeBatch(
+	ctx context.Context,
+	run *contracts.Run,
+	taskIDs []contracts.TaskID,
+) []batchResult {
+	results := make([]batchResult, len(taskIDs))
+	var wg sync.WaitGroup
 
-// executeTask executes a single task with full error handling.
-func (o *orchestrator) executeTask(ctx context.Context, run *contracts.Run, taskID contracts.TaskID) error {
-	// Remove from queued set (task is being processed)
-	delete(o.queued, taskID)
+	for i, taskID := range taskIDs {
+		wg.Add(1)
+		go func(idx int, tid contracts.TaskID) {
+			defer wg.Done()
 
-	task, err := o.getTask(run, taskID)
-	if err != nil {
-		return err
-	}
-
-	// Build context
-	bundle, err := o.contextBuilder.Build(run, taskID)
-	if err != nil {
-		return fmt.Errorf("context build failed: %w", err)
-	}
-
-	compacted, err := o.compactor.Compact(bundle, run.Policy.ContextPolicy)
-	if err != nil {
-		return fmt.Errorf("context compact failed: %w", err)
-	}
-
-	// Estimate cost
-	tokens, err := o.tokenEstimator.Estimate(task.Inputs, compacted)
-	if err != nil {
-		return fmt.Errorf("token estimation failed: %w", err)
-	}
-
-	cost, err := o.costCalc.Estimate(tokens, task.Model)
-	if err != nil {
-		return fmt.Errorf("cost estimation failed: %w", err)
-	}
-
-	// Budget check (pre-execution)
-	if err := o.budgetEnforcer.Allow(run, cost); err != nil {
-		return err // ErrBudgetExceeded
-	}
-
-	// Mark as running before execution
-	task.State = contracts.TaskRunning
-
-	// Execute
-	result, err := o.executor.Execute(ctx, run, taskID)
-	if err != nil {
-		task.State = contracts.TaskFailed
-		return err
-	}
-
-	// Validate usage (executor must report non-zero usage on success)
-	if result.Usage.Tokens == 0 {
-		return fmt.Errorf("executor returned zero usage for task %s", taskID)
-	}
-
-	// Record usage (post-execution)
-	if err := o.budgetEnforcer.Record(run, result.Usage.Cost); err != nil {
-		return fmt.Errorf("budget record failed: %w", err)
-	}
-	o.usageTracker.Add(run, result.Usage) // Add() returns no error per interface
-
-	// Route to dependents
-	if run.DAG != nil && run.DAG.Nodes != nil {
-		if node, ok := run.DAG.Nodes[taskID]; ok && node != nil {
-			for _, depID := range node.Next {
-				if err := o.router.Route(run, taskID, depID, result); err != nil {
-					return fmt.Errorf("routing failed: %w", err)
+			// Validate task exists
+			task, exists := run.Tasks[tid]
+			if !exists {
+				results[idx] = batchResult{
+					taskID: tid,
+					err:    fmt.Errorf("task %s not found", tid),
 				}
+				return
+			}
+
+			// Mark as running (safe: each goroutine touches different task)
+			task.State = contracts.TaskRunning
+
+			// Execute via ParallelExecutor (respects ctx, semaphore)
+			result, err := o.executor.Execute(ctx, run, tid)
+			results[idx] = batchResult{taskID: tid, result: result, err: err}
+		}(i, taskID)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// mergeBatchResults applies batch results SEQUENTIALLY with fail-fast.
+// Results are sorted by TaskID for determinism before applying side-effects.
+// Returns error on first failure.
+func (o *orchestrator) mergeBatchResults(run *contracts.Run, results []batchResult) error {
+	// 1. Sort by TaskID for determinism
+	sort.Slice(results, func(i, j int) bool {
+		return string(results[i].taskID) < string(results[j].taskID)
+	})
+
+	// 2. Apply side-effects sequentially
+	for _, r := range results {
+		task, exists := run.Tasks[r.taskID]
+		if !exists {
+			return fmt.Errorf("task %s not found during merge", r.taskID)
+		}
+
+		if r.err != nil {
+			// Mark task failed with error
+			task.State = contracts.TaskFailed
+			task.Error = &contracts.TaskError{
+				Code:    "execution_failed",
+				Message: r.err.Error(),
+			}
+			// FAIL-FAST: return immediately
+			return fmt.Errorf("task %s execution failed: %w", r.taskID, r.err)
+		}
+
+		// Validate result
+		if r.result == nil || r.result.Usage.Tokens == 0 {
+			task.State = contracts.TaskFailed
+			task.Error = &contracts.TaskError{
+				Code:    "invalid_result",
+				Message: "executor returned nil or zero usage",
+			}
+			return fmt.Errorf("task %s: invalid result", r.taskID)
+		}
+
+		// Record budget (may fail if over budget post-execution)
+		if err := o.budgetEnforcer.Record(run, r.result.Usage.Cost); err != nil {
+			task.State = contracts.TaskFailed
+			task.Error = &contracts.TaskError{
+				Code:    "budget_exceeded",
+				Message: err.Error(),
+			}
+			return fmt.Errorf("task %s budget exceeded: %w", r.taskID, err)
+		}
+
+		// Track usage
+		o.usageTracker.Add(run, r.result.Usage)
+
+		// Scheduler.MarkComplete: sets task.State = Completed, task.Outputs = result
+		// This is the ONLY place where task state becomes Completed
+		if err := o.scheduler.MarkComplete(run, r.taskID, r.result); err != nil {
+			task.State = contracts.TaskFailed
+			task.Error = &contracts.TaskError{
+				Code:    "scheduler_error",
+				Message: err.Error(),
+			}
+			return fmt.Errorf("task %s scheduler error: %w", r.taskID, err)
+		}
+
+		// Route to dependents: iterate DAG.Nodes[taskID].Next
+		// Routing errors are FATAL — inconsistent context state
+		node, nodeExists := run.DAG.Nodes[r.taskID]
+		if !nodeExists {
+			task.State = contracts.TaskFailed
+			task.Error = &contracts.TaskError{
+				Code:    "dag_inconsistent",
+				Message: fmt.Sprintf("DAG node for task %s not found", r.taskID),
+			}
+			return fmt.Errorf("task %s: DAG node not found", r.taskID)
+		}
+		for _, depID := range node.Next {
+			if err := o.router.Route(run, r.taskID, depID, r.result); err != nil {
+				// Mark the dependent task as failed (not the completed one)
+				depTask, depExists := run.Tasks[depID]
+				if depExists {
+					depTask.State = contracts.TaskFailed
+					depTask.Error = &contracts.TaskError{
+						Code:    "routing_failed",
+						Message: fmt.Sprintf("failed to route from %s: %v", r.taskID, err),
+					}
+				}
+				return fmt.Errorf("routing from %s to %s failed: %w", r.taskID, depID, err)
 			}
 		}
 	}
 
-	// Mark complete
-	return o.scheduler.MarkComplete(run, taskID, result)
+	return nil
 }
 
 // isTerminal checks if a task state is terminal (no further processing needed).
@@ -259,15 +429,4 @@ func (o *orchestrator) hasFailures(run *contracts.Run) bool {
 		}
 	}
 	return false
-}
-
-// countTerminal counts tasks in terminal states.
-func (o *orchestrator) countTerminal(run *contracts.Run) int {
-	count := 0
-	for _, task := range run.Tasks {
-		if isTerminal(task.State) {
-			count++
-		}
-	}
-	return count
 }

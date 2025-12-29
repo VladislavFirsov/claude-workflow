@@ -494,17 +494,21 @@ func TestIntegration_BudgetExceeded(t *testing.T) {
 	orch := NewOrchestrator(deps)
 	err = orch.Run(context.Background(), run)
 
-	if !errors.Is(err, contracts.ErrBudgetExceeded) {
-		t.Errorf("expected ErrBudgetExceeded, got %v", err)
+	if err == nil {
+		t.Error("expected error, got nil")
 	}
 
 	assertRunFailed(t, run)
 	assertTaskCompleted(t, run, "A")
 	assertTaskCompleted(t, run, "B")
 
-	// C should not be completed (budget exceeded before execution)
-	if run.Tasks["C"].State == contracts.TaskCompleted {
-		t.Error("expected task C not to complete due to budget")
+	// C should have budget_exceeded error code
+	taskC := run.Tasks["C"]
+	if taskC.State != contracts.TaskFailed {
+		t.Errorf("expected task C failed, got %v", taskC.State)
+	}
+	if taskC.Error == nil || taskC.Error.Code != "budget_exceeded" {
+		t.Errorf("expected task C error with code budget_exceeded, got %+v", taskC.Error)
 	}
 }
 

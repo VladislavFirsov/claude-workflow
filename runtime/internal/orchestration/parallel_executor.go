@@ -83,9 +83,13 @@ func (p *parallelExecutor) Execute(ctx context.Context, run *contracts.Run, task
 	}
 	defer p.untrack(taskID)
 
-	// Acquire semaphore slot (blocks if at capacity)
-	p.sem <- struct{}{}
-	defer func() { <-p.sem }()
+	// Acquire semaphore slot with ctx check (blocks if at capacity)
+	select {
+	case p.sem <- struct{}{}:
+		defer func() { <-p.sem }()
+	case <-ctx.Done():
+		return nil, fmt.Errorf("task %s: semaphore acquire cancelled: %w", taskID, contracts.ErrTaskCancelled)
+	}
 
 	// Apply timeout from policy if specified
 	execCtx := ctx

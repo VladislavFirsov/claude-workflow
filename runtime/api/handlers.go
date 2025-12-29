@@ -194,8 +194,8 @@ func (h *Handlers) HandleEnqueueTask(w http.ResponseWriter, r *http.Request) {
 // RACE SAFETY NOTE:
 // The orchestrator modifies run.Tasks and run.State during execution.
 // To avoid concurrent reads of run, API handlers read only the shadow state
-// maintained by RunStore. The wrapper below updates shadow state after each
-// task execution, and MarkDone performs a final sync after the run completes.
+// maintained by RunStore. The progress callback updates shadow state after each
+// successful batch, and MarkDone performs a final sync after the run completes.
 func (h *Handlers) runOrchestrator(ctx context.Context, run *contracts.Run) {
 	execFn := h.executor
 	if execFn == nil {
@@ -206,29 +206,16 @@ func (h *Handlers) runOrchestrator(ctx context.Context, run *contracts.Run) {
 	h.store.SetShadowRunState(run.ID, contracts.RunRunning)
 	h.store.UpdateTimestamp(run.ID)
 
-	// Wrap executor to update shadow state for running/failure
-	wrappedExecutor := func(execCtx context.Context, task *contracts.Task) (*contracts.TaskResult, error) {
-		h.store.UpdateTaskRunning(run.ID, task.ID)
-		result, err := execFn(execCtx, task)
-		if err != nil {
-			h.store.UpdateTaskFailure(run.ID, task.ID, err)
-			return nil, err
-		}
-		return result, nil
-	}
-
-	// Wrap scheduler to update shadow state on completion
-	baseScheduler := orchestration.NewScheduler()
-	shadowScheduler := &schedulerShadow{
-		inner: baseScheduler,
-		store: h.store,
+	// Progress callback: sync shadow after each successful batch merge
+	onProgress := func(run *contracts.Run) {
+		h.store.UpdateShadowState(run.ID)
 	}
 
 	deps := orchestration.OrchestratorDeps{
-		Scheduler:      shadowScheduler,
+		Scheduler:      orchestration.NewScheduler(),
 		DepResolver:    orchestration.NewDependencyResolver(),
 		Queue:          orchestration.NewQueueManager(),
-		Executor:       orchestration.NewParallelExecutorFromPolicy(run.Policy, wrappedExecutor),
+		Executor:       orchestration.NewParallelExecutorFromPolicy(run.Policy, execFn),
 		ContextBuilder: ctxpkg.NewContextBuilder(),
 		Compactor:      ctxpkg.NewContextCompactor(),
 		TokenEstimator: cost.NewTokenEstimator(),
@@ -238,7 +225,8 @@ func (h *Handlers) runOrchestrator(ctx context.Context, run *contracts.Run) {
 		Router:         ctxpkg.NewContextRouter(),
 	}
 
-	orch := orchestration.NewOrchestrator(deps)
+	// Create orchestrator with progress callback
+	orch := orchestration.NewOrchestratorWithCallback(deps, onProgress)
 	err := orch.Run(ctx, run)
 	h.store.MarkDone(run.ID, err)
 }
@@ -258,24 +246,6 @@ func defaultExecutor(ctx context.Context, task *contracts.Task) (*contracts.Task
 			Cost:   contracts.Cost{Amount: 0.001, Currency: "USD"},
 		},
 	}, nil
-}
-
-// schedulerShadow wraps Scheduler to update shadow state on successful completion.
-type schedulerShadow struct {
-	inner contracts.Scheduler
-	store *RunStore
-}
-
-func (s *schedulerShadow) NextReady(run *contracts.Run) ([]contracts.TaskID, error) {
-	return s.inner.NextReady(run)
-}
-
-func (s *schedulerShadow) MarkComplete(run *contracts.Run, taskID contracts.TaskID, result *contracts.TaskResult) error {
-	if err := s.inner.MarkComplete(run, taskID, result); err != nil {
-		return err
-	}
-	s.store.UpdateTaskSuccess(run.ID, taskID, result)
-	return nil
 }
 
 // validateStartRunRequest validates a StartRunRequest.

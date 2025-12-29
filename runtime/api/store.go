@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -557,19 +558,19 @@ func (s *RunStore) CancelAll() int {
 
 // WaitAll waits for all active runs to complete, with a timeout.
 // Returns the number of runs still active after timeout.
+// Uses reflect.Select to wait on ANY done channel (not just the first).
 func (s *RunStore) WaitAll(timeout time.Duration) int {
 	deadline := time.Now().Add(timeout)
 
 	for {
 		s.mu.RLock()
-		active := 0
 		var doneChannels []chan struct{}
 		for _, entry := range s.runs {
 			if !s.isDone(entry) {
-				active++
 				doneChannels = append(doneChannels, entry.Done)
 			}
 		}
+		active := len(doneChannels)
 		s.mu.RUnlock()
 
 		if active == 0 {
@@ -581,13 +582,22 @@ func (s *RunStore) WaitAll(timeout time.Duration) int {
 			return active
 		}
 
-		// Wait for any run to complete or timeout
-		select {
-		case <-time.After(remaining):
-			return active
-		case <-doneChannels[0]:
-			// One run completed, loop to check others
+		// Build select cases for ALL done channels + timeout
+		cases := make([]reflect.SelectCase, len(doneChannels)+1)
+		for i, ch := range doneChannels {
+			cases[i] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)}
 		}
+		cases[len(doneChannels)] = reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(time.After(remaining)),
+		}
+
+		chosen, _, _ := reflect.Select(cases)
+		if chosen == len(doneChannels) {
+			// Timeout case
+			return active
+		}
+		// Some run completed, loop to check remaining
 	}
 }
 

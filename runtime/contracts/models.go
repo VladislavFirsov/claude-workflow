@@ -82,10 +82,10 @@ type ContextBundle struct {
 
 // ContextPolicy defines how context should be managed.
 type ContextPolicy struct {
-	MaxTokens  TokenCount
-	Strategy   string
-	KeepLastN  int
-	TruncateTo TokenCount
+	MaxTokens TokenCount
+	Strategy  string
+	KeepLastN int
+	// TruncateTo removed - out of scope V1
 }
 
 // RunPolicy defines execution constraints for a run.
