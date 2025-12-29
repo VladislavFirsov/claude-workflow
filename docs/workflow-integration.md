@@ -3,6 +3,33 @@
 Runtime sidecar provides HTTP API for executing DAG-based workflows.
 Workflow layer is a **thin client** — it only submits DAGs and polls status.
 
+## System Flow
+
+```
+User / LangChain
+      |
+      | 1) Define workflow (DAG + policy)
+      v
+Workflow Layer (agents/skills)
+      |
+      | 2) Serialize StartRunRequest (JSON)
+      v
+workflow-client (thin CLI client)
+      |
+      | 3) POST /api/v1/runs
+      v
+Runtime Sidecar (execution engine)
+      |
+      | 4) Execute DAG with policy (budget/parallelism)
+      v
+Run Status / Results (GET /api/v1/runs/{id})
+```
+
+Key points:
+- Workflow defines *what* to do; runtime enforces *how* it executes.
+- Runtime is model-agnostic; agents/skills can change without touching runtime.
+- Any tool (CLI, LangChain, IDE) can submit a run via the same HTTP API.
+
 ## Quick Start
 
 ### 1. Start Runtime Sidecar
@@ -56,6 +83,81 @@ curl http://localhost:8080/api/v1/runs/workflow-001
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/runs/workflow-001/abort
+```
+
+## CLI Client
+
+A thin CLI client is provided for submitting runs and checking status.
+
+### Build
+
+```bash
+cd runtime && go build -o workflow-client ./cmd/workflow-client/
+```
+
+### Usage
+
+```bash
+# Submit a run from JSON file
+./workflow-client submit --file run.json --addr http://localhost:8080
+
+# Check run status
+./workflow-client status --id workflow-001 --addr http://localhost:8080
+```
+
+### Example JSON (run.json)
+
+Note: `id` is optional. If omitted, runtime generates a run ID (e.g., `run-<unix_nano>`).
+
+```json
+{
+  "id": "workflow-001",
+  "policy": {
+    "max_parallelism": 4,
+    "timeout_ms": 300000,
+    "budget_limit": { "amount": 5.0, "currency": "USD" },
+    "context_policy": {
+      "max_tokens": 8000,
+      "strategy": "truncate",
+      "keep_last_n": 50
+    }
+  },
+  "tasks": [
+    {
+      "id": "analyze",
+      "prompt": "Analyze requirements",
+      "model": "claude-3-haiku-20240307"
+    },
+    {
+      "id": "design",
+      "prompt": "Design architecture",
+      "model": "claude-3-sonnet-20240229",
+      "deps": ["analyze"]
+    },
+    {
+      "id": "implement",
+      "prompt": "Implement solution",
+      "model": "claude-3-sonnet-20240229",
+      "deps": ["design"]
+    }
+  ]
+}
+```
+
+### Output
+
+```bash
+# submit
+run_id=workflow-001 state=running
+
+# status (completed)
+run_id=workflow-001 state=completed
+tasks: analyze=completed, design=completed, implement=completed
+
+# status (failed with task error code)
+run_id=workflow-001 state=failed
+tasks: analyze=completed, design=failed(execution_failed)
+error: [task_failed] task design execution failed: ...
 ```
 
 ## Response Format
