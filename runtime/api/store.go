@@ -11,7 +11,7 @@ import (
 
 // RunEntry represents a run stored in the RunStore.
 type RunEntry struct {
-	mu sync.RWMutex // protects shadowState
+	mu sync.RWMutex // protects shadowState, Aborting, UpdatedAt
 
 	// Run is the actual run object, modified by orchestrator.
 	// WARNING: Do not read from this directly - use shadowState for reads.
@@ -138,16 +138,16 @@ func (s *RunStore) GetSnapshot(id contracts.RunID) (*RunSnapshot, bool) {
 		return nil, false
 	}
 	// Copy entry-level fields under store lock (immutable or separately protected)
-	aborting := entry.Aborting
 	done := s.isDone(entry)
 	createdAt := entry.CreatedAt.UnixMilli() // immutable after create
 	runErr := entry.Error
 	runID := entry.Run.ID
 	s.mu.RUnlock()
 
-	// Lock entry's shadowState for reading (also protects UpdatedAt)
+	// Lock entry's shadowState for reading (also protects Aborting and UpdatedAt)
 	entry.mu.RLock()
 	defer entry.mu.RUnlock()
+	aborting := entry.Aborting
 	updatedAt := entry.UpdatedAt.UnixMilli()
 
 	shadow := entry.shadowState
@@ -224,8 +224,8 @@ func (s *RunStore) Abort(id contracts.RunID) error {
 	}
 
 	// Mark as aborting, update timestamp, and cancel
-	entry.Aborting = true
 	entry.mu.Lock()
+	entry.Aborting = true
 	entry.UpdatedAt = time.Now()
 	entry.mu.Unlock()
 
@@ -267,6 +267,12 @@ func (s *RunStore) UpdateShadowState(id contracts.RunID) {
 			ts.Error = &contracts.TaskError{
 				Code:    task.Error.Code,
 				Message: task.Error.Message,
+			}
+		} else if existing, ok := entry.shadowState.Tasks[id]; ok && existing.Error != nil {
+			// Preserve shadow error if run.Task.Error wasn't populated.
+			ts.Error = &contracts.TaskError{
+				Code:    existing.Error.Code,
+				Message: existing.Error.Message,
 			}
 		}
 		entry.shadowState.Tasks[id] = ts
@@ -425,7 +431,9 @@ func (s *RunStore) MarkDone(id contracts.RunID, err error) {
 	}
 
 	entry.Error = err
+	entry.mu.Lock()
 	entry.UpdatedAt = time.Now()
+	entry.mu.Unlock()
 
 	// Close Done channel to signal completion
 	select {
@@ -439,14 +447,18 @@ func (s *RunStore) MarkDone(id contracts.RunID, err error) {
 // IsAborting returns true if Abort was called but the run hasn't finished yet.
 func (s *RunStore) IsAborting(id contracts.RunID) bool {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	entry, exists := s.runs[id]
 	if !exists {
+		s.mu.RUnlock()
 		return false
 	}
+	done := s.isDone(entry)
+	s.mu.RUnlock()
 
-	return entry.Aborting && !s.isDone(entry)
+	entry.mu.RLock()
+	aborting := entry.Aborting
+	entry.mu.RUnlock()
+	return aborting && !done
 }
 
 // isDone checks if the Done channel is closed (must be called with lock held for RLock).
@@ -468,12 +480,12 @@ func (s *RunStore) GetAPIState(id contracts.RunID) string {
 		s.mu.RUnlock()
 		return ""
 	}
-	aborting := entry.Aborting
 	done := s.isDone(entry)
 	s.mu.RUnlock()
 
 	entry.mu.RLock()
 	defer entry.mu.RUnlock()
+	aborting := entry.Aborting
 
 	// If aborting but not yet done, return "aborting"
 	if aborting && !done {
@@ -490,14 +502,20 @@ func (s *RunStore) GetAPIState(id contracts.RunID) string {
 // GetTimestamps returns the created and updated timestamps for a run.
 func (s *RunStore) GetTimestamps(id contracts.RunID) (createdAt, updatedAt int64) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	entry, exists := s.runs[id]
 	if !exists {
+		s.mu.RUnlock()
 		return 0, 0
 	}
+	createdAt = entry.CreatedAt.UnixMilli() // immutable after create
+	s.mu.RUnlock()
 
-	return entry.CreatedAt.UnixMilli(), entry.UpdatedAt.UnixMilli()
+	// UpdatedAt is protected by entry.mu
+	entry.mu.RLock()
+	updatedAt = entry.UpdatedAt.UnixMilli()
+	entry.mu.RUnlock()
+
+	return createdAt, updatedAt
 }
 
 // CancelAll cancels all active runs. Used for graceful shutdown.
@@ -508,24 +526,27 @@ func (s *RunStore) CancelAll() int {
 
 	cancelled := 0
 	for _, entry := range s.runs {
-		// Skip already completed or aborting runs
-		if entry.Aborting {
-			continue
-		}
+		// Skip already completed or aborting runs (read under entry.mu)
 		entry.mu.RLock()
+		aborting := entry.Aborting
 		shadowState := contracts.RunPending
 		if entry.shadowState != nil {
 			shadowState = entry.shadowState.State
 		}
 		entry.mu.RUnlock()
+		if aborting {
+			continue
+		}
 		switch shadowState {
 		case contracts.RunCompleted, contracts.RunFailed, contracts.RunAborted:
 			continue
 		}
 
 		// Cancel the run
+		entry.mu.Lock()
 		entry.Aborting = true
 		entry.UpdatedAt = time.Now()
+		entry.mu.Unlock()
 		if entry.Cancel != nil {
 			entry.Cancel()
 		}
@@ -587,7 +608,10 @@ func (s *RunStore) PruneCompleted(retention time.Duration) int {
 		if !s.isDone(entry) {
 			continue
 		}
-		if entry.UpdatedAt.Before(cutoff) {
+		entry.mu.RLock()
+		updatedAt := entry.UpdatedAt
+		entry.mu.RUnlock()
+		if updatedAt.Before(cutoff) {
 			delete(s.runs, id)
 			removed++
 		}
