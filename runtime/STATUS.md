@@ -1,7 +1,7 @@
 # Runtime Layer — Project Status
 
 > **Last Updated:** 2025-12-28
-> **Status:** Core Complete, Factory Helper Done
+> **Status:** Core Complete, HTTP API Done
 
 ## Quick Start for New Session
 
@@ -13,7 +13,7 @@ go test ./... -v
 
 ---
 
-## Completed Components (14/14)
+## Completed Components (19/19)
 
 | Domain | Component | Path | Tests |
 |--------|-----------|------|-------|
@@ -22,6 +22,7 @@ go test ./... -v
 | | ParallelExecutor | `internal/orchestration/parallel_executor.go` | ✅ |
 | | QueueManager | `internal/orchestration/queue_manager.go` | ✅ |
 | | **Orchestrator** | `internal/orchestration/orchestrator.go` | ✅ |
+| | Factory | `internal/orchestration/factory.go` | ✅ |
 | **Cost** | TokenEstimator | `internal/cost/token_estimator.go` | ✅ |
 | | CostCalculator | `internal/cost/cost_calculator.go` | ✅ |
 | | BudgetEnforcer | `internal/cost/budget_enforcer.go` | ✅ |
@@ -31,6 +32,10 @@ go test ./... -v
 | | ContextCompactor | `internal/context/context_compactor.go` | ✅ |
 | | ContextRouter | `internal/context/context_router.go` | ✅ |
 | | MemoryManager | `internal/context/memory_manager.go` | ✅ |
+| **API** | Server | `api/server.go` | ✅ |
+| | Handlers | `api/handlers.go` | ✅ |
+| | RunStore | `api/store.go` | ✅ |
+| | Models/Errors | `api/models.go`, `api/errors.go` | ✅ |
 
 ---
 
@@ -51,13 +56,20 @@ go test ./... -v
   - `NewOrchestratorWithDefaults(policy, executor)` — simple API
   - `NewOrchestratorWithOptions(policy, executor, opts)` — custom ModelCatalog/Currency
   - 6 tests including single-task and multi-task E2E
+- **HTTP API surface** (`api/`) — REST API for sidecar runtime:
+  - `POST /api/v1/runs` — StartRun (202 Accepted, async execution)
+  - `GET /api/v1/runs/{id}` — GetStatus (includes "aborting" API state)
+  - `POST /api/v1/runs/{id}/abort` — AbortRun (fire-and-forget)
+  - `POST /api/v1/runs/{id}/tasks` — EnqueueTask (501 Not Implemented in V1)
+  - RunStore with mutex, DTOs, error mapping to HTTP status codes
+  - 14 tests (5 store + 7 handler + 2 integration)
+  - Sidecar binary: `cmd/sidecar/main.go`
 
 ### Next
-1. HTTP API surface (StartRun, EnqueueTask, GetStatus, AbortRun).
-2. Config system for ModelCatalog + policies (YAML/JSON).
-3. LangChain adapter (Python SDK).
-4. Observability (logs, metrics, tracing).
-5. CLI for local runs and debugging.
+1. Config system for ModelCatalog + policies (YAML/JSON).
+2. LangChain adapter (Python SDK).
+3. Observability (logs, metrics, tracing).
+4. CLI for local runs and debugging.
 
 ---
 
@@ -80,6 +92,19 @@ runtime/contracts/
 ├── errors.go          # All sentinel errors
 ├── orchestrator.go    # Orchestrator interface
 └── models_catalog.go  # ModelInfo, ModelRole, ModelCatalog
+```
+
+### API Layer
+```
+runtime/api/
+├── server.go          # HTTP server, http.ServeMux router
+├── handlers.go        # StartRun, GetStatus, AbortRun, EnqueueTask
+├── models.go          # Request/Response DTOs
+├── errors.go          # Error → HTTP status mapping
+└── store.go           # In-memory RunStore
+
+runtime/cmd/sidecar/
+└── main.go            # Entry point for sidecar binary
 ```
 
 ### Orchestrator Main Loop
@@ -168,9 +193,30 @@ func NewOrchestratorWithOptions(
 // - TestFactory_MultiTaskE2E
 ```
 
-### 3. (Future) HTTP API
-- REST endpoints for StartRun, EnqueueTask, GetStatus, AbortRun
-- See design doc for contract details
+### 3. HTTP API ✅ DONE
+```
+Files:
+- api/models.go      # Request/Response DTOs
+- api/errors.go      # Error mapping to HTTP status codes
+- api/store.go       # In-memory RunStore with mutex
+- api/handlers.go    # HTTP handlers
+- api/server.go      # Server + http.ServeMux router (Go 1.22+)
+- api/server_test.go # 14 tests
+- cmd/sidecar/main.go # Entry point
+
+Endpoints:
+- POST /api/v1/runs           → StartRun (202)
+- GET  /api/v1/runs/{id}      → GetStatus (200)
+- POST /api/v1/runs/{id}/abort → AbortRun (200, fire-and-forget)
+- POST /api/v1/runs/{id}/tasks → EnqueueTask (501, V1 limitation)
+
+Key design:
+- Policy from request only (stateless API)
+- "aborting" is API-level state (not contracts.RunState)
+- Duplicate run ID → 409 Conflict
+- DAG cycle → 422 Unprocessable Entity
+- Budget exceeded → 422 (not 402)
+```
 
 ---
 
@@ -194,10 +240,18 @@ go test ./... -cover
 
 # Run specific package
 go test ./internal/orchestration/... -v
+go test ./api/... -v
 
 # Run integration tests only
 go test ./internal/orchestration/... -run Integration -v
+go test ./api/... -run TestServer -v
 
 # Run specific test
 go test ./internal/orchestration/... -run TestOrchestrator -v
+
+# Build sidecar binary
+go build -o sidecar ./cmd/sidecar/
+
+# Run sidecar (default :8080)
+./sidecar -addr :8080
 ```
