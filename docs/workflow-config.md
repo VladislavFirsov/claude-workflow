@@ -143,7 +143,30 @@ Array of output artifact paths produced by this step.
 | `optional role must depend on spec-validator` | Optional role in wrong position |
 | `unknown role for spec-default workflow` | Role not in required or optional list |
 
-## Usage
+## CLI Submission
+
+Submit a workflow config directly to the runtime:
+
+```bash
+# Basic submission (uses workflow.name as run ID)
+workflow-client submit-config --file workflow.json
+
+# With custom server address
+workflow-client submit-config --file workflow.json --addr http://localhost:8080
+
+# With custom run ID
+workflow-client submit-config --file workflow.json --run-id my-run-123
+
+# Check status
+workflow-client status --id my-run-123
+```
+
+The CLI converts workflow config to a StartRunRequest with:
+- Default timeout: 5 minutes
+- Default parallelism: 1 (sequential)
+- Default budget: $10 USD
+
+## Go API Usage
 
 ```go
 import "github.com/anthropics/claude-workflow/runtime/config"
