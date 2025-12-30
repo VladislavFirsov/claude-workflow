@@ -165,12 +165,7 @@ func convertWorkflowConfig(cfg *config.WorkflowConfig, runID string) *startRunRe
 	tasks := make([]taskDTO, 0, len(cfg.Workflow.Steps))
 
 	for _, step := range cfg.Workflow.Steps {
-		// Map role to model
-		model, ok := roleToModel[step.Role]
-		if !ok {
-			fmt.Fprintf(os.Stderr, "warning: unknown role %q, using default model\n", step.Role)
-			model = defaultModel
-		}
+		model := getModelForRole(cfg, step.Role)
 
 		// Build metadata
 		metadata := map[string]string{
@@ -203,6 +198,26 @@ func convertWorkflowConfig(cfg *config.WorkflowConfig, runID string) *startRunRe
 		},
 		Tasks: tasks,
 	}
+}
+
+// getModelForRole resolves model for a role with fallback chain:
+// 1. cfg.Workflow.Models[role] (config override)
+// 2. roleToModel[role] (CLI default)
+// 3. defaultModel + warning
+func getModelForRole(cfg *config.WorkflowConfig, role string) string {
+	// 1. Check config models
+	if cfg.Workflow.Models != nil {
+		if model, ok := cfg.Workflow.Models[role]; ok {
+			return model
+		}
+	}
+	// 2. Check CLI fallback
+	if model, ok := roleToModel[role]; ok {
+		return model
+	}
+	// 3. Default + warning
+	fmt.Fprintf(os.Stderr, "warning: unknown role %q, using default model\n", role)
+	return defaultModel
 }
 
 // statusCmd: GET /api/v1/runs/{id}

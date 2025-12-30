@@ -125,6 +125,30 @@ Array of step IDs that must complete before this step can run.
 
 Array of output artifact paths produced by this step.
 
+### workflow.models (optional)
+
+Map of role names to Claude model IDs. Overrides CLI default model selection.
+
+```json
+{
+  "workflow": {
+    "name": "custom-models",
+    "models": {
+      "spec-analyst": "claude-opus-4-20250514",
+      "spec-architect": "claude-sonnet-4-20250514",
+      "spec-developer": "claude-sonnet-4-20250514",
+      "spec-validator": "claude-haiku-4-20250514"
+    },
+    "steps": [...]
+  }
+}
+```
+
+Model resolution order:
+1. `workflow.models[role]` if defined
+2. CLI default for known roles
+3. Fallback model with warning
+
 ## Error Messages
 
 | Error | Description |

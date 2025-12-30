@@ -18,9 +18,10 @@ const (
 
 // Workflow defines a named workflow with a list of steps.
 type Workflow struct {
-	Name  string       `json:"name"`
-	Type  WorkflowType `json:"type,omitempty"`
-	Steps []Step       `json:"steps"`
+	Name   string            `json:"name"`
+	Type   WorkflowType      `json:"type,omitempty"`
+	Steps  []Step            `json:"steps"`
+	Models map[string]string `json:"models,omitempty"` // role -> model mapping
 }
 
 // Step defines a single step in the workflow.
