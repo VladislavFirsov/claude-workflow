@@ -1,195 +1,195 @@
 # Architecture Intent: claude-workflow
 
-## Назначение документа
+## Document Purpose
 
-Этот документ фиксирует **архитектурный замысел проекта `claude-workflow`**:
-- зачем он создаётся;
-- какую фундаментальную проблему решает;
-- чем он должен стать со временем;
-- какие границы ответственности считаются инвариантными.
+This document captures the **architectural intent of the `claude-workflow` project**:
+- why it exists;
+- the fundamental problem it solves;
+- what it should become over time;
+- which responsibility boundaries are considered invariant.
 
-Документ предназначен для:
-- архитектора;
-- core-разработчиков runtime-слоя;
-- принятия решений о дальнейшем развитии проекта.
+The document is for:
+- the architect;
+- core runtime developers;
+- decision-making on the project's дальнейшее развитие.
 
-Это **не документация по использованию** и **не продуктовый pitch**.
+This is **not usage documentation** and **not a product pitch**.
 
 ---
 
-## 1. Что такое `claude-workflow` сейчас (фактическое состояние)
+## 1. What `claude-workflow` Is Today (Current State)
 
-`claude-workflow` — это **рабочий прототип (PoC с завершённым core)**, состоящий из двух логически связанных частей:
+`claude-workflow` is a **working prototype (PoC with a completed core)** consisting of two logically connected parts:
 
-### 1. Workflow-слой (Claude Code)
-- Набор **sub-agents** (spec-analyst, spec-architect, spec-developer, validator и т.д.).
-- Формализованный workflow разработки:
-   - анализ → архитектура → реализация → валидация → тесты.
-- Реализован как **slash-command** для Claude Code.
-- Отвечает за *что делать и в каком порядке*.
+### 1. Workflow Layer (Claude Code)
+- A set of **sub-agents** (spec-analyst, spec-architect, spec-developer, validator, etc.).
+- A formalized development workflow:
+   - analysis → architecture → implementation → validation → tests.
+- Implemented as a **slash command** for Claude Code.
+- Responsible for *what to do and in what order*.
 
-### 2. Runtime-слой (Go sidecar)
-- Отдельный **runtime-sidecar сервис**.
-- Реализует:
-   - DAG и зависимости;
-   - планирование и параллельное исполнение;
-   - маршрутизацию контекста;
-   - учёт токенов и budget enforcement;
+### 2. Runtime Layer (Go Sidecar)
+- A separate **runtime-sidecar service**.
+- Implements:
+   - DAG and dependencies;
+   - scheduling and parallel execution;
+   - context routing;
+   - token accounting and budget enforcement;
    - HTTP API.
-- Core помечен как **Complete**, покрыт тестами.
-- Реальный вызов LLM/инструментов **инжектируется извне** (runtime не привязан к конкретной модели).
+- The core is marked **Complete** and covered by tests.
+- Actual LLM/tool execution is **injected externally** (runtime is not tied to a specific model).
 
-Важно:
-> Проект **уже реализует ключевые архитектурные идеи**,  
-> но **ещё не является завершённым продуктом**.
-
----
-
-## 2. Почему этот проект вообще создаётся (ключевая причина)
-
-Проект не возник из идеи «сделать ещё один агентный фреймворк».
-
-Он возник из **структурной проблемы**, наблюдаемой на практике:
-
-> LLM-системы очень быстро перестают быть “скриптами”  
-> и превращаются в **распределённые системы без runtime-дисциплины**.
-
-### Симптомы проблемы
-- рост стоимости нелинеен и плохо объясним;
-- параллельные агенты дублируют контекст;
-- порядок выполнения влияет на результат;
-- поведение сложно воспроизвести;
-- человек становится “message bus” между агентами.
-
-Эта проблема:
-- **не решается промтами**;
-- **не решается best practices**;
-- **не решается на уровне workflow-DSL**.
-
-Это **runtime-проблема**, а не проблема логики.
+Important:
+> The project **already implements key architectural ideas**,  
+> but **is not yet a finished product**.
 
 ---
 
-## 3. Зачем существует `claude-workflow` (суть проекта)
+## 2. Why This Project Exists (Core Reason)
 
-### Короткая формулировка
+The project did not originate from the idea of "building another agent framework."
 
-> `claude-workflow` существует, чтобы **отделить описание LLM-процесса  
-> от его исполнения** и сделать это исполнение **управляемым, предсказуемым и воспроизводимым**.
+It arose from a **structural problem** observed in practice:
+
+> LLM systems quickly stop being "scripts"  
+> and become **distributed systems without runtime discipline**.
+
+### Symptoms
+- cost growth is nonlinear and hard to explain;
+- parallel agents duplicate context;
+- execution order affects results;
+- behavior is hard to reproduce;
+- humans become the "message bus" between agents.
+
+This problem:
+- **is not solved by prompts**;
+- **is not solved by best practices**;
+- **is not solved at the workflow-DSL level**.
+
+It is a **runtime problem**, not a logic problem.
 
 ---
 
-## 4. Что является ядром проекта (инвариант)
+## 3. Why `claude-workflow` Exists (Essence)
 
-### Архитектурный инвариант
+### Short Formulation
 
-`claude-workflow` — это **execution & governance runtime**, а не:
+> `claude-workflow` exists to **separate the description of an LLM process  
+> from its execution** and make that execution **manageable, predictable, and reproducible**.
+
+---
+
+## 4. What Is the Core of the Project (Invariant)
+
+### Architectural Invariant
+
+`claude-workflow` is an **execution & governance runtime**, not:
 
 - UI;
 - SaaS;
-- агент “для пользователей”;
-- фреймворк для написания промтов.
+- a user-facing agent;
+- a prompt-writing framework.
 
-### Его фундаментальная функция
+### Fundamental Function
 
-> **Быть runtime-слоем для сложных LLM-workflow,  
-> где execution — это управляемый ресурс.**
-
----
-
-## 5. Граница ответственности проекта
-
-### Проект ОТВЕЧАЕТ за:
-- оркестрацию шагов (DAG, зависимости);
-- параллельное исполнение;
-- маршрутизацию и изоляцию контекста;
-- учёт и ограничение стоимости;
-- execution-policy (что разрешено / запрещено);
-- воспроизводимость и аудит.
-
-### Проект НЕ ОТВЕЧАЕТ за:
-- UX и интерфейсы;
-- бизнес-логику;
-- выбор LLM-провайдера;
-- качество генерации;
-- инструменты (IDE, GitHub, CI).
-
-Это жёсткая граница.  
-Нарушение её размывает проект.
+> **To be the runtime layer for complex LLM workflows,  
+> where execution is a managed resource.**
 
 ---
 
-## 6. Почему workflow-слой (sub-agents) важен, но не главный
+## 5. Responsibility Boundary
 
-Workflow-слой:
-- демонстрирует **реальный use-case**;
-- служит **dogfooding** для runtime;
-- позволяет проверять архитектурные гипотезы.
+### The Project IS responsible for:
+- step orchestration (DAG, dependencies);
+- parallel execution;
+- context routing and isolation;
+- cost accounting and limits;
+- execution policy (what is allowed / prohibited);
+- reproducibility and auditability.
 
-Но стратегически:
+### The Project is NOT responsible for:
+- UX and interfaces;
+- business logic;
+- LLM provider selection;
+- generation quality;
+- tools (IDE, GitHub, CI).
 
-> Workflow — **клиент runtime**,  
-> а runtime — **ценность проекта**.
+This boundary is strict.  
+Violating it dilutes the project.
 
 ---
 
-## 7. Во что проект должен эволюционировать
+## 6. Why the Workflow Layer (Sub-Agents) Is Important but Not Primary
 
-### Целевое состояние (north star)
+The workflow layer:
+- demonstrates a **real use case**;
+- serves as **dogfooding** for the runtime;
+- validates architectural hypotheses.
 
-`claude-workflow` должен стать:
+But strategically:
 
-> **универсальным runtime-sidecar’ом  
-> для сложных LLM-workflow и агентных систем**,  
-> независимо от конкретного фреймворка или модели.
+> Workflow is the **runtime's client**,  
+> and the runtime is the **core value**.
 
-Характеристики:
+---
+
+## 7. What the Project Should Evolve Into
+
+### Target State (North Star)
+
+`claude-workflow` should become:
+
+> a **universal runtime sidecar  
+> for complex LLM workflows and agent systems**,  
+> regardless of the framework or model.
+
+Characteristics:
 - self-hosted;
 - contracts-first;
 - model-agnostic;
 - workflow-agnostic;
-- ориентирован на команды, а не на одиночных пользователей.
+- team-oriented (not just for individual users).
 
 ---
 
-## 8. Как это связано с CLI-оркестрацией (Claude / Codex)
+## 8. How This Relates to CLI Orchestration (Claude / Codex)
 
-CLI-оркестрация:
-- не является отдельным продуктом;
-- является **частным случаем использования runtime**.
+CLI orchestration:
+- is not a separate product;
+- is a **specific use case of the runtime**.
 
-Текущий ручной процесс:
-- Claude пишет план и код;
-- Codex делает ревью;
-- человек маршрутизирует.
+The current manual process:
+- Claude writes the plan and code;
+- Codex reviews;
+- a human routes tasks.
 
-Этот кейс:
-- идеально ложится на архитектуру runtime;
-- демонстрирует, зачем нужен execution-контроль;
-- служит проверкой, что runtime работает вне API-мира.
-
----
-
-## 9. Критерии архитектурного успеха проекта
-
-Проект движется в правильном направлении, если:
-
-- runtime можно использовать без Claude Code;
-- workflow можно переписать, не меняя runtime;
-- execution-policy задаётся явно и enforce’ится;
-- человек перестаёт быть message bus;
-- runtime остаётся простым и объяснимым.
+This case:
+- fits the runtime architecture perfectly;
+- demonstrates why execution control matters;
+- validates that the runtime works outside the API world.
 
 ---
 
-## 10. Ключевая мысль для архитектора
+## 9. Architectural Success Criteria
 
-> `claude-workflow` — это не про агентов.  
-> Это про **дисциплину исполнения LLM-процессов**.
+The project is moving in the right direction if:
 
-Все архитектурные решения должны проверяться вопросом:
+- the runtime can be used without Claude Code;
+- the workflow can be rewritten without changing the runtime;
+- execution policy is explicitly defined and enforced;
+- humans stop being the message bus;
+- the runtime remains simple and explainable.
 
-> *Помогает ли это сделать execution более управляемым,  
-> или это просто добавляет “умности”?*
+---
 
-Если второе — это вне цели проекта.
+## 10. Key Thought for the Architect
+
+> `claude-workflow` is not about agents.  
+> It is about **execution discipline for LLM processes**.
+
+All architectural decisions should be tested by the question:
+
+> *Does this make execution more manageable,  
+> or does it just add "cleverness"?*
+
+If the latter, it is outside the project's scope.
