@@ -30,4 +30,19 @@ var (
 
 	// ErrRequiredRoleMissing is returned when a required role is not present.
 	ErrRequiredRoleMissing = errors.New("required role is missing")
+
+	// ErrRequiredRoleOrder is returned when required roles are not in canonical order.
+	ErrRequiredRoleOrder = errors.New("required roles must be in canonical order")
+
+	// ErrRequiredRoleDuplicate is returned when a required role appears more than once.
+	ErrRequiredRoleDuplicate = errors.New("required role appears more than once")
+
+	// ErrOptionalRolePlacement is returned when optional role depends on non-validator step.
+	ErrOptionalRolePlacement = errors.New("optional role must depend on spec-validator")
+
+	// ErrUnknownRole is returned when a role is neither required nor optional for spec-default.
+	ErrUnknownRole = errors.New("unknown role for spec-default workflow")
+
+	// ErrInvalidDependencyChain is returned when required steps don't form proper chain.
+	ErrInvalidDependencyChain = errors.New("required step must depend on previous required step")
 )

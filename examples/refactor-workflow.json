@@ -1,0 +1,37 @@
+{
+  "workflow": {
+    "name": "code-refactor-pipeline",
+    "type": "custom",
+    "steps": [
+      {
+        "id": "analyze",
+        "role": "code-analyzer",
+        "outputs": ["analysis-report.md", "hotspots.json"]
+      },
+      {
+        "id": "plan",
+        "role": "refactor-planner",
+        "depends_on": ["analyze"],
+        "outputs": ["refactor-plan.md"]
+      },
+      {
+        "id": "refactor",
+        "role": "code-refactorer",
+        "depends_on": ["plan"],
+        "outputs": ["src/"]
+      },
+      {
+        "id": "test",
+        "role": "test-runner",
+        "depends_on": ["refactor"],
+        "outputs": ["test-results.json"]
+      },
+      {
+        "id": "review",
+        "role": "code-reviewer",
+        "depends_on": ["refactor", "test"],
+        "outputs": ["review-report.md"]
+      }
+    ]
+  }
+}

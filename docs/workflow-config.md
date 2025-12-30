@@ -4,12 +4,25 @@ Static workflow configurations define fixed agent chains for the claude-workflow
 
 **Primary format**: JSON. YAML support may be added in a future version.
 
-## JSON Format
+## Workflow Types
+
+The `workflow.type` field controls validation behavior:
+
+| Type | Required Roles | Order | Chain | Optional Placement |
+|------|---------------|-------|-------|-------------------|
+| `""` (empty) | Must be present | No | No | No |
+| `"custom"` | Skipped entirely | No | No | No |
+| `"spec-default"` | Exactly once each | Yes | Yes | Yes |
+
+## spec-default Workflow
+
+The canonical spec workflow with strict validation rules.
 
 ```json
 {
   "workflow": {
     "name": "default-spec-flow",
+    "type": "spec-default",
     "steps": [
       {
         "id": "analysis",
@@ -33,7 +46,50 @@ Static workflow configurations define fixed agent chains for the claude-workflow
         "role": "spec-validator",
         "depends_on": ["implementation"],
         "outputs": ["validation-report.md"]
+      },
+      {
+        "id": "testing",
+        "role": "spec-tester",
+        "depends_on": ["validation"]
       }
+    ]
+  }
+}
+```
+
+### Required Roles (in canonical order)
+
+1. `spec-analyst`
+2. `spec-architect`
+3. `spec-developer`
+4. `spec-validator`
+
+### Optional Roles
+
+- `spec-tester`
+- `spec-reviewer`
+
+### Validation Rules for spec-default
+
+1. Each required role must appear exactly once
+2. Required roles must appear in canonical order
+3. Each required step must depend on the previous required step
+4. Optional roles must depend on `spec-validator` only
+5. No unknown roles allowed
+
+## Custom Workflows
+
+Use `type: "custom"` to skip required role validation entirely:
+
+```json
+{
+  "workflow": {
+    "name": "data-pipeline",
+    "type": "custom",
+    "steps": [
+      {"id": "fetch", "role": "data-fetcher"},
+      {"id": "process", "role": "data-processor", "depends_on": ["fetch"]},
+      {"id": "store", "role": "data-writer", "depends_on": ["process"]}
     ]
   }
 }
@@ -45,6 +101,10 @@ Static workflow configurations define fixed agent chains for the claude-workflow
 
 A human-readable name for the workflow.
 
+### workflow.type (optional)
+
+Workflow type for validation. Values: `"spec-default"`, `"custom"`, or empty.
+
 ### workflow.steps (required)
 
 An array of step definitions. Must contain at least one step.
@@ -55,12 +115,7 @@ Unique identifier for the step within the workflow.
 
 ### step.role (required)
 
-Agent role for this step. Required roles that must be present:
-
-- `spec-analyst`
-- `spec-architect`
-- `spec-developer`
-- `spec-validator`
+Agent role for this step.
 
 ### step.depends_on (optional)
 
@@ -69,16 +124,6 @@ Array of step IDs that must complete before this step can run.
 ### step.outputs (optional)
 
 Array of output artifact paths produced by this step.
-
-## Validation Rules
-
-1. `workflow.name` must be non-empty
-2. `workflow.steps` must contain at least one step
-3. Each `step.id` must be unique
-4. Each `step.role` must be non-empty
-5. All `depends_on` references must point to existing step IDs
-6. No cycles allowed in dependencies
-7. All required roles must be present
 
 ## Error Messages
 
@@ -91,7 +136,12 @@ Array of output artifact paths produced by this step.
 | `step.role is required` | Step has empty role |
 | `depends_on references unknown step id` | Invalid dependency reference |
 | `cycle detected in step dependencies` | Circular dependency found |
-| `required role is missing` | Missing spec-analyst/architect/developer/validator |
+| `required role is missing` | Missing required role |
+| `required role appears more than once` | Duplicate required role in spec-default |
+| `required roles must be in canonical order` | Wrong order in spec-default |
+| `required step must depend on previous required step` | Broken chain in spec-default |
+| `optional role must depend on spec-validator` | Optional role in wrong position |
+| `unknown role for spec-default workflow` | Role not in required or optional list |
 
 ## Usage
 
@@ -108,30 +158,4 @@ if err != nil {
 
 // Or load from bytes
 cfg, err := loader.LoadFromBytes(jsonData)
-```
-
-## Custom Workflows
-
-By default, the validator requires all spec workflow roles (spec-analyst, spec-architect, spec-developer, spec-validator). For custom workflows with different roles, disable this check:
-
-```go
-validator := config.NewValidatorWithOptions(config.ValidatorOptions{
-    RequireDefaultRoles: false,
-})
-err := validator.Validate(cfg)
-```
-
-This allows workflows like:
-
-```json
-{
-  "workflow": {
-    "name": "data-pipeline",
-    "steps": [
-      {"id": "fetch", "role": "data-fetcher"},
-      {"id": "process", "role": "data-processor", "depends_on": ["fetch"]},
-      {"id": "store", "role": "data-writer", "depends_on": ["process"]}
-    ]
-  }
-}
 ```

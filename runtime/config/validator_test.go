@@ -253,11 +253,12 @@ func TestValidator_ValidConfig_WithOutputs(t *testing.T) {
 }
 
 func TestValidator_CustomWorkflow_WithoutRequiredRoles(t *testing.T) {
-	// Custom workflow with different roles - RequireDefaultRoles=false
-	v := NewValidatorWithOptions(ValidatorOptions{RequireDefaultRoles: false})
+	// Custom workflow with different roles - type=custom skips required role check
+	v := NewValidator()
 	cfg := &WorkflowConfig{
 		Workflow: Workflow{
 			Name: "custom-flow",
+			Type: WorkflowTypeCustom,
 			Steps: []Step{
 				{ID: "fetch", Role: "data-fetcher"},
 				{ID: "process", Role: "data-processor", DependsOn: []string{"fetch"}},
@@ -272,11 +273,12 @@ func TestValidator_CustomWorkflow_WithoutRequiredRoles(t *testing.T) {
 }
 
 func TestValidator_CustomWorkflow_StillValidatesStructure(t *testing.T) {
-	// Custom workflow still validates cycles even with RequireDefaultRoles=false
-	v := NewValidatorWithOptions(ValidatorOptions{RequireDefaultRoles: false})
+	// Custom workflow still validates cycles
+	v := NewValidator()
 	cfg := &WorkflowConfig{
 		Workflow: Workflow{
 			Name: "custom-cycle",
+			Type: WorkflowTypeCustom,
 			Steps: []Step{
 				{ID: "a", Role: "custom-role", DependsOn: []string{"b"}},
 				{ID: "b", Role: "custom-role", DependsOn: []string{"a"}},
@@ -286,5 +288,211 @@ func TestValidator_CustomWorkflow_StillValidatesStructure(t *testing.T) {
 	err := v.Validate(cfg)
 	if !errors.Is(err, ErrCycleDetected) {
 		t.Fatalf("expected ErrCycleDetected, got %v", err)
+	}
+}
+
+// ============ spec-default validation tests ============
+
+func TestValidator_SpecDefault_ValidCanonical(t *testing.T) {
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "default-spec-flow",
+			Type: WorkflowTypeSpecDefault,
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_ValidWithOptional(t *testing.T) {
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "spec-flow-with-tester",
+			Type: WorkflowTypeSpecDefault,
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+				{ID: "testing", Role: "spec-tester", DependsOn: []string{"validation"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_MissingRequiredRole(t *testing.T) {
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "missing-role",
+			Type: WorkflowTypeSpecDefault,
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				// Missing spec-developer and spec-validator
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrRequiredRoleMissing) {
+		t.Fatalf("expected ErrRequiredRoleMissing, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_DuplicateRequiredRole(t *testing.T) {
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "duplicate-role",
+			Type: WorkflowTypeSpecDefault,
+			Steps: []Step{
+				{ID: "analysis1", Role: "spec-analyst"},
+				{ID: "analysis2", Role: "spec-analyst", DependsOn: []string{"analysis1"}},
+				{ID: "arch", Role: "spec-architect", DependsOn: []string{"analysis2"}},
+				{ID: "dev", Role: "spec-developer", DependsOn: []string{"arch"}},
+				{ID: "val", Role: "spec-validator", DependsOn: []string{"dev"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrRequiredRoleDuplicate) {
+		t.Fatalf("expected ErrRequiredRoleDuplicate, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_WrongOrder(t *testing.T) {
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "wrong-order",
+			Type: WorkflowTypeSpecDefault,
+			Steps: []Step{
+				{ID: "arch", Role: "spec-architect"},
+				{ID: "analysis", Role: "spec-analyst", DependsOn: []string{"arch"}},
+				{ID: "dev", Role: "spec-developer", DependsOn: []string{"analysis"}},
+				{ID: "val", Role: "spec-validator", DependsOn: []string{"dev"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrRequiredRoleOrder) {
+		t.Fatalf("expected ErrRequiredRoleOrder, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_InvalidDependencyChain(t *testing.T) {
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "broken-chain",
+			Type: WorkflowTypeSpecDefault,
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect"}, // Missing depends_on analysis
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrInvalidDependencyChain) {
+		t.Fatalf("expected ErrInvalidDependencyChain, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_OptionalInMiddle(t *testing.T) {
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "optional-in-middle",
+			Type: WorkflowTypeSpecDefault,
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "review", Role: "spec-reviewer", DependsOn: []string{"analysis"}}, // Wrong placement
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "dev", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "val", Role: "spec-validator", DependsOn: []string{"dev"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrOptionalRolePlacement) {
+		t.Fatalf("expected ErrOptionalRolePlacement, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_UnknownRole(t *testing.T) {
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "unknown-role",
+			Type: WorkflowTypeSpecDefault,
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+				{ID: "custom", Role: "my-custom-agent", DependsOn: []string{"validation"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrUnknownRole) {
+		t.Fatalf("expected ErrUnknownRole, got %v", err)
+	}
+}
+
+func TestValidator_EmptyType_RequiredRolesPresent(t *testing.T) {
+	// type="" with required roles present - should pass
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "empty-type-valid",
+			// Type is empty (default)
+			Steps: []Step{
+				{ID: "a", Role: "spec-analyst"},
+				{ID: "b", Role: "spec-architect"},
+				{ID: "c", Role: "spec-developer"},
+				{ID: "d", Role: "spec-validator"},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidator_EmptyType_MissingRequiredRole(t *testing.T) {
+	// type="" with missing required role - should fail
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name: "empty-type-missing",
+			// Type is empty (default)
+			Steps: []Step{
+				{ID: "a", Role: "spec-analyst"},
+				{ID: "b", Role: "spec-architect"},
+				// Missing spec-developer and spec-validator
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrRequiredRoleMissing) {
+		t.Fatalf("expected ErrRequiredRoleMissing, got %v", err)
 	}
 }

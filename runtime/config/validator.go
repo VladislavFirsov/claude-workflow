@@ -2,36 +2,12 @@ package config
 
 import "fmt"
 
-// ValidatorOptions configures optional validation behavior.
-type ValidatorOptions struct {
-	// RequireDefaultRoles enables validation that all default spec workflow roles
-	// (spec-analyst, spec-architect, spec-developer, spec-validator) are present.
-	// Default: true for backwards compatibility with default spec workflow.
-	RequireDefaultRoles bool
-}
-
-// DefaultValidatorOptions returns options suitable for the default spec workflow.
-func DefaultValidatorOptions() ValidatorOptions {
-	return ValidatorOptions{
-		RequireDefaultRoles: true,
-	}
-}
-
 // Validator validates workflow configurations.
-type Validator struct {
-	opts ValidatorOptions
-}
+type Validator struct{}
 
-// NewValidator creates a new configuration validator with default options.
-// Validates that all required spec workflow roles are present.
+// NewValidator creates a new configuration validator.
 func NewValidator() *Validator {
-	return &Validator{opts: DefaultValidatorOptions()}
-}
-
-// NewValidatorWithOptions creates a validator with custom options.
-// Use RequireDefaultRoles=false for custom workflows without spec-* roles.
-func NewValidatorWithOptions(opts ValidatorOptions) *Validator {
-	return &Validator{opts: opts}
+	return &Validator{}
 }
 
 // Validate performs comprehensive validation of a WorkflowConfig.
@@ -87,16 +63,18 @@ func (v *Validator) Validate(cfg *WorkflowConfig) error {
 		return err
 	}
 
-	// 6. Validate required roles are present (if enabled)
-	if v.opts.RequireDefaultRoles {
-		for _, requiredRole := range RequiredRoles() {
-			if !roleSet[requiredRole] {
-				return fmt.Errorf("role=%s: %w", requiredRole, ErrRequiredRoleMissing)
-			}
-		}
+	// 6. Type-based validation dispatch
+	switch cfg.Workflow.Type {
+	case WorkflowTypeSpecDefault:
+		// Strict canonical validation
+		return v.validateSpecDefault(cfg.Workflow.Steps, roleSet)
+	case WorkflowTypeCustom:
+		// Skip required role checking entirely
+		return nil
+	default:
+		// type == "" (empty): current behavior - required roles must be present
+		return v.validateRequiredRolesPresent(roleSet)
 	}
-
-	return nil
 }
 
 // detectCycle uses DFS with color marking to detect cycles in dependencies.
@@ -151,4 +129,129 @@ func (v *Validator) hasCycle(node string, colors map[string]int, adj map[string]
 
 	colors[node] = 2 // black (visited)
 	return false
+}
+
+// validateRequiredRolesPresent checks that all required roles are present (no order).
+// Used for type == "" (empty) backwards compatibility.
+func (v *Validator) validateRequiredRolesPresent(roleSet map[Role]bool) error {
+	for _, requiredRole := range RequiredRoles() {
+		if !roleSet[requiredRole] {
+			return fmt.Errorf("role=%s: %w", requiredRole, ErrRequiredRoleMissing)
+		}
+	}
+	return nil
+}
+
+// validateSpecDefault performs strict canonical validation for spec-default workflow.
+func (v *Validator) validateSpecDefault(steps []Step, roleSet map[Role]bool) error {
+	requiredRoles := RequiredRoles()
+	optionalRoles := OptionalRoles()
+
+	// Build lookup sets
+	requiredSet := make(map[Role]bool)
+	for _, r := range requiredRoles {
+		requiredSet[r] = true
+	}
+	optionalSet := make(map[Role]bool)
+	for _, r := range optionalRoles {
+		optionalSet[r] = true
+	}
+
+	// 1. Check all roles are either required or optional
+	for _, step := range steps {
+		role := Role(step.Role)
+		if !requiredSet[role] && !optionalSet[role] {
+			return fmt.Errorf("step.id=%s role=%s: %w", step.ID, step.Role, ErrUnknownRole)
+		}
+	}
+
+	// 2. Check required roles are present exactly once
+	roleCounts := make(map[Role]int)
+	for _, step := range steps {
+		role := Role(step.Role)
+		if requiredSet[role] {
+			roleCounts[role]++
+		}
+	}
+	for _, reqRole := range requiredRoles {
+		count := roleCounts[reqRole]
+		if count == 0 {
+			return fmt.Errorf("role=%s: %w", reqRole, ErrRequiredRoleMissing)
+		}
+		if count > 1 {
+			return fmt.Errorf("role=%s: %w", reqRole, ErrRequiredRoleDuplicate)
+		}
+	}
+
+	// 3. Check required roles are in canonical order
+	// Find steps with required roles and check their order matches
+	requiredSteps := make([]Step, 0, len(requiredRoles))
+	for _, step := range steps {
+		role := Role(step.Role)
+		if requiredSet[role] {
+			requiredSteps = append(requiredSteps, step)
+		}
+	}
+
+	// Check order matches canonical order
+	for i, step := range requiredSteps {
+		expectedRole := requiredRoles[i]
+		actualRole := Role(step.Role)
+		if actualRole != expectedRole {
+			return fmt.Errorf("step.id=%s: expected role=%s at position %d, got %s: %w",
+				step.ID, expectedRole, i, actualRole, ErrRequiredRoleOrder)
+		}
+	}
+
+	// 4. Check dependency chain for required steps
+	// Each required step (except first) must depend on the previous required step
+	stepByRole := make(map[Role]Step)
+	for _, step := range steps {
+		role := Role(step.Role)
+		if requiredSet[role] {
+			stepByRole[role] = step
+		}
+	}
+
+	for i := 1; i < len(requiredRoles); i++ {
+		currentRole := requiredRoles[i]
+		prevRole := requiredRoles[i-1]
+		currentStep := stepByRole[currentRole]
+		prevStep := stepByRole[prevRole]
+
+		// Check that current step depends on previous step
+		dependsOnPrev := false
+		for _, depID := range currentStep.DependsOn {
+			if depID == prevStep.ID {
+				dependsOnPrev = true
+				break
+			}
+		}
+		if !dependsOnPrev {
+			return fmt.Errorf("step.id=%s (role=%s) must depend on step.id=%s (role=%s): %w",
+				currentStep.ID, currentRole, prevStep.ID, prevRole, ErrInvalidDependencyChain)
+		}
+	}
+
+	// 5. Check optional roles depend only on spec-validator
+	validatorStep := stepByRole[RoleSpecValidator]
+	for _, step := range steps {
+		role := Role(step.Role)
+		if optionalSet[role] {
+			// Optional step must depend on validator
+			dependsOnValidator := false
+			for _, depID := range step.DependsOn {
+				if depID == validatorStep.ID {
+					dependsOnValidator = true
+					break
+				}
+			}
+			if !dependsOnValidator {
+				return fmt.Errorf("step.id=%s (role=%s) must depend on %s: %w",
+					step.ID, step.Role, validatorStep.ID, ErrOptionalRolePlacement)
+			}
+		}
+	}
+
+	return nil
 }
