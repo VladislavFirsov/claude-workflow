@@ -45,4 +45,7 @@ var (
 
 	// ErrInvalidDependencyChain is returned when required steps don't form proper chain.
 	ErrInvalidDependencyChain = errors.New("required step must depend on previous required step")
+
+	// ErrOptionalNotAllowed is returned when optional_enabled contains a role not in optional_roles.
+	ErrOptionalNotAllowed = errors.New("optional_enabled contains role not in optional_roles")
 )

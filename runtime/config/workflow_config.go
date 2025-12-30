@@ -18,10 +18,12 @@ const (
 
 // Workflow defines a named workflow with a list of steps.
 type Workflow struct {
-	Name   string            `json:"name"`
-	Type   WorkflowType      `json:"type,omitempty"`
-	Steps  []Step            `json:"steps"`
-	Models map[string]string `json:"models,omitempty"` // role -> model mapping
+	Name            string            `json:"name"`
+	Type            WorkflowType      `json:"type,omitempty"`
+	Steps           []Step            `json:"steps"`
+	Models          map[string]string `json:"models,omitempty"`           // role -> model mapping
+	OptionalRoles   []string          `json:"optional_roles,omitempty"`   // allowed optional roles (default: spec-tester, spec-reviewer)
+	OptionalEnabled []string          `json:"optional_enabled,omitempty"` // enabled subset of optional_roles
 }
 
 // Step defines a single step in the workflow.

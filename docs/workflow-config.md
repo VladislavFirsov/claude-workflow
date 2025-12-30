@@ -89,8 +89,41 @@ The canonical spec workflow with strict validation rules.
 
 ### Optional Roles
 
+Default optional roles:
 - `spec-tester`
 - `spec-reviewer`
+
+### Customizing Optional Roles
+
+Use `optional_roles` to define custom optional roles, and `optional_enabled` to enable a subset:
+
+```json
+{
+  "workflow": {
+    "name": "custom-optional-flow",
+    "type": "spec-default",
+    "optional_roles": ["spec-reviewer", "spec-tester", "spec-qa"],
+    "optional_enabled": ["spec-reviewer"],
+    "steps": [
+      {"id": "analysis", "role": "spec-analyst"},
+      {"id": "architecture", "role": "spec-architect", "depends_on": ["analysis"]},
+      {"id": "implementation", "role": "spec-developer", "depends_on": ["architecture"]},
+      {"id": "validation", "role": "spec-validator", "depends_on": ["implementation"]},
+      {"id": "review", "role": "spec-reviewer", "depends_on": ["validation"]}
+    ]
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `optional_roles` | Allowed optional roles (replaces defaults if set) |
+| `optional_enabled` | Subset of optional_roles that can be used in steps |
+
+Behavior:
+- Empty `optional_roles` → uses defaults (`spec-tester`, `spec-reviewer`)
+- Empty `optional_enabled` → all `optional_roles` are allowed
+- `optional_enabled` must be subset of effective `optional_roles`
 
 ### Validation Rules for spec-default
 
@@ -148,6 +181,14 @@ Array of step IDs that must complete before this step can run.
 
 Array of output artifact paths produced by this step.
 
+### workflow.optional_roles (optional)
+
+Array of allowed optional role names. When set, replaces the default optional roles (`spec-tester`, `spec-reviewer`). Only applies to `spec-default` workflows.
+
+### workflow.optional_enabled (optional)
+
+Array of enabled optional role names. Must be a subset of `optional_roles` (or default optional roles if `optional_roles` is empty). When set, only these roles can be used as optional steps.
+
 ### workflow.models (optional)
 
 Map of role names to Claude model IDs. Overrides CLI default model selection.
@@ -189,6 +230,7 @@ Model resolution order:
 | `required step must depend on previous required step` | Broken chain in spec-default |
 | `optional role must depend on spec-validator` | Optional role in wrong position |
 | `unknown role for spec-default workflow` | Role not in required or optional list |
+| `optional_enabled contains role not in optional_roles` | Role in optional_enabled is not in optional_roles |
 
 ## CLI Submission
 

@@ -496,3 +496,191 @@ func TestValidator_EmptyType_MissingRequiredRole(t *testing.T) {
 		t.Fatalf("expected ErrRequiredRoleMissing, got %v", err)
 	}
 }
+
+// ============ optional_roles and optional_enabled tests ============
+
+func TestValidator_SpecDefault_CustomOptionalRoles(t *testing.T) {
+	// Custom optional_roles allows new roles
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name:          "custom-optional",
+			Type:          WorkflowTypeSpecDefault,
+			OptionalRoles: []string{"spec-qa", "spec-security"},
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+				{ID: "qa", Role: "spec-qa", DependsOn: []string{"validation"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_CustomOptionalRoles_RejectsDefault(t *testing.T) {
+	// Custom optional_roles replaces default - spec-tester no longer allowed
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name:          "custom-optional-reject",
+			Type:          WorkflowTypeSpecDefault,
+			OptionalRoles: []string{"spec-qa"}, // Only spec-qa allowed
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+				{ID: "testing", Role: "spec-tester", DependsOn: []string{"validation"}}, // Not in optional_roles
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrUnknownRole) {
+		t.Fatalf("expected ErrUnknownRole, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_OptionalEnabledNotInOptionalRoles(t *testing.T) {
+	// optional_enabled contains role not in optional_roles
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name:            "invalid-optional-enabled",
+			Type:            WorkflowTypeSpecDefault,
+			OptionalRoles:   []string{"spec-qa"},
+			OptionalEnabled: []string{"spec-security"}, // Not in optional_roles
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrOptionalNotAllowed) {
+		t.Fatalf("expected ErrOptionalNotAllowed, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_OptionalEnabledSubset(t *testing.T) {
+	// optional_enabled is subset of optional_roles - only enabled roles allowed
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name:            "optional-enabled-subset",
+			Type:            WorkflowTypeSpecDefault,
+			OptionalRoles:   []string{"spec-reviewer", "spec-tester", "spec-qa"},
+			OptionalEnabled: []string{"spec-reviewer"}, // Only reviewer enabled
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+				{ID: "review", Role: "spec-reviewer", DependsOn: []string{"validation"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_OptionalEnabledRejectsNonEnabled(t *testing.T) {
+	// optional_enabled restricts which optional roles can be used
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name:            "optional-enabled-rejects",
+			Type:            WorkflowTypeSpecDefault,
+			OptionalRoles:   []string{"spec-reviewer", "spec-tester"},
+			OptionalEnabled: []string{"spec-reviewer"}, // Only reviewer enabled
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+				{ID: "testing", Role: "spec-tester", DependsOn: []string{"validation"}}, // Not enabled
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrUnknownRole) {
+		t.Fatalf("expected ErrUnknownRole, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_OptionalEnabledWithDefaultRoles(t *testing.T) {
+	// optional_enabled with default optional_roles (empty optional_roles)
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name:            "optional-enabled-default",
+			Type:            WorkflowTypeSpecDefault,
+			OptionalEnabled: []string{"spec-reviewer"}, // Enable only reviewer from defaults
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+				{ID: "review", Role: "spec-reviewer", DependsOn: []string{"validation"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_OptionalEnabledRejectsNonEnabledDefault(t *testing.T) {
+	// optional_enabled with default optional_roles - rejects non-enabled
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name:            "optional-enabled-default-reject",
+			Type:            WorkflowTypeSpecDefault,
+			OptionalEnabled: []string{"spec-reviewer"}, // Enable only reviewer
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+				{ID: "testing", Role: "spec-tester", DependsOn: []string{"validation"}}, // Not enabled
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrUnknownRole) {
+		t.Fatalf("expected ErrUnknownRole, got %v", err)
+	}
+}
+
+func TestValidator_SpecDefault_OptionalRoleMustDependOnValidator(t *testing.T) {
+	// Even with custom optional_roles, placement rule applies
+	v := NewValidator()
+	cfg := &WorkflowConfig{
+		Workflow: Workflow{
+			Name:          "optional-placement",
+			Type:          WorkflowTypeSpecDefault,
+			OptionalRoles: []string{"spec-qa"},
+			Steps: []Step{
+				{ID: "analysis", Role: "spec-analyst"},
+				{ID: "architecture", Role: "spec-architect", DependsOn: []string{"analysis"}},
+				{ID: "qa", Role: "spec-qa", DependsOn: []string{"architecture"}}, // Wrong - should depend on validator
+				{ID: "implementation", Role: "spec-developer", DependsOn: []string{"architecture"}},
+				{ID: "validation", Role: "spec-validator", DependsOn: []string{"implementation"}},
+			},
+		},
+	}
+	err := v.Validate(cfg)
+	if !errors.Is(err, ErrOptionalRolePlacement) {
+		t.Fatalf("expected ErrOptionalRolePlacement, got %v", err)
+	}
+}

@@ -67,7 +67,7 @@ func (v *Validator) Validate(cfg *WorkflowConfig) error {
 	switch cfg.Workflow.Type {
 	case WorkflowTypeSpecDefault:
 		// Strict canonical validation
-		return v.validateSpecDefault(cfg.Workflow.Steps, roleSet)
+		return v.validateSpecDefault(&cfg.Workflow, cfg.Workflow.Steps, roleSet)
 	case WorkflowTypeCustom:
 		// Skip required role checking entirely
 		return nil
@@ -143,9 +143,40 @@ func (v *Validator) validateRequiredRolesPresent(roleSet map[Role]bool) error {
 }
 
 // validateSpecDefault performs strict canonical validation for spec-default workflow.
-func (v *Validator) validateSpecDefault(steps []Step, roleSet map[Role]bool) error {
+func (v *Validator) validateSpecDefault(wf *Workflow, steps []Step, roleSet map[Role]bool) error {
 	requiredRoles := RequiredRoles()
-	optionalRoles := OptionalRoles()
+
+	// 1. Determine effective optional roles
+	var effectiveOptional []Role
+	if len(wf.OptionalRoles) > 0 {
+		for _, r := range wf.OptionalRoles {
+			effectiveOptional = append(effectiveOptional, Role(r))
+		}
+	} else {
+		effectiveOptional = OptionalRoles() // default
+	}
+
+	// 2. Determine allowed optional roles for steps
+	// If optional_enabled empty → all effectiveOptional allowed
+	// If optional_enabled set → only those roles allowed
+	var allowedOptional []Role
+	if len(wf.OptionalEnabled) > 0 {
+		// Build effective optional set for validation
+		effectiveOptionalSet := make(map[Role]bool)
+		for _, r := range effectiveOptional {
+			effectiveOptionalSet[r] = true
+		}
+		// Validate optional_enabled is subset of effectiveOptional
+		for _, r := range wf.OptionalEnabled {
+			if !effectiveOptionalSet[Role(r)] {
+				return fmt.Errorf("role=%s: %w", r, ErrOptionalNotAllowed)
+			}
+			allowedOptional = append(allowedOptional, Role(r))
+		}
+	} else {
+		// Empty optional_enabled → all effectiveOptional allowed
+		allowedOptional = effectiveOptional
+	}
 
 	// Build lookup sets
 	requiredSet := make(map[Role]bool)
@@ -153,11 +184,11 @@ func (v *Validator) validateSpecDefault(steps []Step, roleSet map[Role]bool) err
 		requiredSet[r] = true
 	}
 	optionalSet := make(map[Role]bool)
-	for _, r := range optionalRoles {
+	for _, r := range allowedOptional {
 		optionalSet[r] = true
 	}
 
-	// 1. Check all roles are either required or optional
+	// 3. Check all roles are either required or allowed optional
 	for _, step := range steps {
 		role := Role(step.Role)
 		if !requiredSet[role] && !optionalSet[role] {
@@ -165,7 +196,7 @@ func (v *Validator) validateSpecDefault(steps []Step, roleSet map[Role]bool) err
 		}
 	}
 
-	// 2. Check required roles are present exactly once
+	// 4. Check required roles are present exactly once
 	roleCounts := make(map[Role]int)
 	for _, step := range steps {
 		role := Role(step.Role)
@@ -183,7 +214,7 @@ func (v *Validator) validateSpecDefault(steps []Step, roleSet map[Role]bool) err
 		}
 	}
 
-	// 3. Check required roles are in canonical order
+	// 5. Check required roles are in canonical order
 	// Find steps with required roles and check their order matches
 	requiredSteps := make([]Step, 0, len(requiredRoles))
 	for _, step := range steps {
@@ -203,7 +234,7 @@ func (v *Validator) validateSpecDefault(steps []Step, roleSet map[Role]bool) err
 		}
 	}
 
-	// 4. Check dependency chain for required steps
+	// 6. Check dependency chain for required steps
 	// Each required step (except first) must depend on the previous required step
 	stepByRole := make(map[Role]Step)
 	for _, step := range steps {
@@ -233,7 +264,7 @@ func (v *Validator) validateSpecDefault(steps []Step, roleSet map[Role]bool) err
 		}
 	}
 
-	// 5. Check optional roles depend only on spec-validator
+	// 7. Check optional roles depend only on spec-validator
 	validatorStep := stepByRole[RoleSpecValidator]
 	for _, step := range steps {
 		role := Role(step.Role)
