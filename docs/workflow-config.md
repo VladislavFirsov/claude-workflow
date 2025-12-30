@@ -4,6 +4,29 @@ Static workflow configurations define fixed agent chains for the claude-workflow
 
 **Primary format**: JSON. YAML support may be added in a future version.
 
+## Quick Start
+
+End-to-end example using the spec-default workflow:
+
+```bash
+# 1. Build the binaries (from runtime directory)
+cd runtime
+go build ./cmd/sidecar
+go build ./cmd/workflow-client
+
+# 2. Start the sidecar (in a separate terminal)
+./sidecar
+
+# 3. Submit a workflow
+./workflow-client submit-config --file ../examples/spec-default-workflow.json
+# Output: run_id=spec-default-example state=running (or pending)
+
+# 4. Check status
+./workflow-client status --id spec-default-example
+# Output: run_id=spec-default-example state=running
+# tasks: analysis=running, architecture=pending, implementation=pending, validation=pending
+```
+
 ## Workflow Types
 
 The `workflow.type` field controls validation behavior:

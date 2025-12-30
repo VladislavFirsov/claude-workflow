@@ -1,0 +1,37 @@
+{
+  "workflow": {
+    "name": "spec-default-example",
+    "type": "spec-default",
+    "models": {
+      "spec-analyst": "claude-sonnet-4-20250514",
+      "spec-architect": "claude-sonnet-4-20250514",
+      "spec-developer": "claude-sonnet-4-20250514",
+      "spec-validator": "claude-sonnet-4-20250514"
+    },
+    "steps": [
+      {
+        "id": "analysis",
+        "role": "spec-analyst",
+        "outputs": ["requirements.md"]
+      },
+      {
+        "id": "architecture",
+        "role": "spec-architect",
+        "depends_on": ["analysis"],
+        "outputs": ["architecture.md"]
+      },
+      {
+        "id": "implementation",
+        "role": "spec-developer",
+        "depends_on": ["architecture"],
+        "outputs": ["src/"]
+      },
+      {
+        "id": "validation",
+        "role": "spec-validator",
+        "depends_on": ["implementation"],
+        "outputs": ["validation-report.md"]
+      }
+    ]
+  }
+}
