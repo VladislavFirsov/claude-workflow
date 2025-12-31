@@ -22,6 +22,7 @@ type Workflow struct {
 	Type            WorkflowType      `json:"type,omitempty"`
 	Steps           []Step            `json:"steps"`
 	Models          map[string]string `json:"models,omitempty"`           // role -> model mapping
+	Policy          *PolicyConfig     `json:"policy,omitempty"`           // execution policy
 	OptionalRoles   []string          `json:"optional_roles,omitempty"`   // allowed optional roles (default: spec-tester, spec-reviewer)
 	OptionalEnabled []string          `json:"optional_enabled,omitempty"` // enabled subset of optional_roles
 }
@@ -32,6 +33,19 @@ type Step struct {
 	Role      string   `json:"role"`
 	DependsOn []string `json:"depends_on,omitempty"`
 	Outputs   []string `json:"outputs,omitempty"`
+}
+
+// PolicyConfig represents execution policy for a workflow.
+type PolicyConfig struct {
+	TimeoutMs      int64         `json:"timeout_ms,omitempty"`
+	MaxParallelism int           `json:"max_parallelism,omitempty"`
+	BudgetLimit    *BudgetConfig `json:"budget_limit,omitempty"`
+}
+
+// BudgetConfig represents budget constraints.
+type BudgetConfig struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
 }
 
 // Role represents an agent role identifier.

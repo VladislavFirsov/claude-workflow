@@ -213,6 +213,36 @@ Model resolution order:
 2. CLI default for known roles
 3. Fallback model with warning
 
+### workflow.policy (optional)
+
+Execution policy for the workflow. All fields are optional with sensible defaults.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout_ms` | int64 | 300000 | Execution timeout in milliseconds (5 min) |
+| `max_parallelism` | int | 1 | Max concurrent tasks (1 = sequential) |
+| `budget_limit.amount` | float64 | 10.0 | Budget limit amount |
+| `budget_limit.currency` | string | "USD" | Budget currency |
+
+```json
+{
+  "workflow": {
+    "name": "fast-parallel",
+    "policy": {
+      "timeout_ms": 600000,
+      "max_parallelism": 4,
+      "budget_limit": {"amount": 50.0, "currency": "USD"}
+    },
+    "steps": [
+      {"id": "analysis", "role": "spec-analyst"},
+      {"id": "architecture", "role": "spec-architect", "depends_on": ["analysis"]},
+      {"id": "implementation", "role": "spec-developer", "depends_on": ["architecture"]},
+      {"id": "validation", "role": "spec-validator", "depends_on": ["implementation"]}
+    ]
+  }
+}
+```
+
 ## Error Messages
 
 | Error | Description |
@@ -250,10 +280,10 @@ workflow-client submit-config --file workflow.json --run-id my-run-123
 workflow-client status --id my-run-123
 ```
 
-The CLI converts workflow config to a StartRunRequest with:
-- Default timeout: 5 minutes
-- Default parallelism: 1 (sequential)
-- Default budget: $10 USD
+The CLI converts workflow config to a StartRunRequest. Policy values can be specified in `workflow.policy`, with defaults:
+- Timeout: 5 minutes (300000 ms)
+- Parallelism: 1 (sequential)
+- Budget: $10 USD
 
 ## Go API Usage
 
@@ -270,4 +300,88 @@ if err != nil {
 
 // Or load from bytes
 cfg, err := loader.LoadFromBytes(jsonData)
+```
+
+## Generated StartRunRequest
+
+When `submit-config` converts a workflow config, it generates a StartRunRequest for the runtime API.
+
+**Example workflow config:**
+```json
+{
+  "workflow": {
+    "name": "spec-default-example",
+    "type": "spec-default",
+    "policy": {
+      "timeout_ms": 300000,
+      "max_parallelism": 2,
+      "budget_limit": {"amount": 10.0, "currency": "USD"}
+    },
+    "models": {
+      "spec-analyst": "claude-sonnet-4-20250514"
+    },
+    "steps": [
+      {"id": "analysis", "role": "spec-analyst", "outputs": ["requirements.md"]},
+      {"id": "architecture", "role": "spec-architect", "depends_on": ["analysis"]},
+      {"id": "implementation", "role": "spec-developer", "depends_on": ["architecture"]},
+      {"id": "validation", "role": "spec-validator", "depends_on": ["implementation"]}
+    ]
+  }
+}
+```
+
+**Generated StartRunRequest:**
+```json
+{
+  "id": "spec-default-example",
+  "policy": {
+    "timeout_ms": 300000,
+    "max_parallelism": 2,
+    "budget_limit": {"amount": 10.0, "currency": "USD"}
+  },
+  "tasks": [
+    {
+      "id": "analysis",
+      "prompt": "Execute spec-analyst step: analysis",
+      "model": "claude-sonnet-4-20250514",
+      "metadata": {"role": "spec-analyst", "outputs": "[\"requirements.md\"]"}
+    },
+    {
+      "id": "architecture",
+      "prompt": "Execute spec-architect step: architecture",
+      "model": "claude-sonnet-4-20250514",
+      "deps": ["analysis"],
+      "metadata": {"role": "spec-architect"}
+    },
+    {
+      "id": "implementation",
+      "prompt": "Execute spec-developer step: implementation",
+      "model": "claude-sonnet-4-20250514",
+      "deps": ["architecture"],
+      "metadata": {"role": "spec-developer"}
+    },
+    {
+      "id": "validation",
+      "prompt": "Execute spec-validator step: validation",
+      "model": "claude-sonnet-4-20250514",
+      "deps": ["implementation"],
+      "metadata": {"role": "spec-validator"}
+    }
+  ]
+}
+```
+
+**Expected response:**
+```json
+{
+  "id": "spec-default-example",
+  "state": "running",
+  "tasks": {
+    "analysis": {"state": "running"},
+    "architecture": {"state": "pending"},
+    "implementation": {"state": "pending"},
+    "validation": {"state": "pending"}
+  },
+  "created_at": 1735660800000
+}
 ```

@@ -1,66 +1,66 @@
-# Contracts-First Parallel: Проблемы и решения
+# Contracts-First Parallel: Problems and Solutions
 
-## Контекст
+## Context
 
-**Проект:** Runtime Layer для агентных LLM-систем (sidecar, Go, LangChain)
+**Project:** Runtime Layer for agentic LLM systems (sidecar, Go, LangChain)
 
-**Подход:** Contracts-First Parallel Development
-- spec-architect генерирует контракты (interfaces, DTO, errors)
-- Простые компоненты → параллельно через Haiku
-- Сложные компоненты → Sonnet/Opus
-- Codex → только для GitHub code review
+**Approach:** Contracts-First Parallel Development
+- spec-architect generates contracts (interfaces, DTO, errors)
+- Simple components -> parallel via Haiku
+- Complex components -> Sonnet/Opus
+- Codex -> only for GitHub code review
 
-**Документ архитектуры:** `docs/2025_12_26/design/runtime-layer-v1-draft.md`
+**Architecture document:** `docs/2025_12_26/design/runtime-layer-v1-draft.md`
 
 ---
 
-## Проблема 1: Потребление токенов ✅ РЕШЕНО
+## Problem 1: Token consumption ✅ RESOLVED
 
-### Суть
-При параллельном запуске агентов каждый получает полный system prompt, контракты, контекст. Это дублирование увеличивает стоимость на 80%.
+### Essence
+With parallel agent runs, each agent receives the full system prompt, contracts, and context. This duplication increases cost by 80%.
 
-### Решение: Tiered Prompts
+### Solution: Tiered Prompts
 
 ```
-TIER 1 (800-1,000 токенов) — Haiku
-  Структура: <role> + <contract> (inline) + <pattern> (1 пример) + <task> + <success_criteria>
-  Для: детерминированная логика, чистые вычисления, stateless
+TIER 1 (800-1,000 tokens) — Haiku
+  Structure: <role> + <contract> (inline) + <pattern> (1 example) + <task> + <success_criteria>
+  For: deterministic logic, pure computation, stateless
 
-TIER 2 (1,500-2,200 токенов) — Sonnet
-  Добавляет: <dependencies> + <business_rules> + <patterns> (2-3) + <edge_cases>
-  Для: координация, state management, интеграция компонентов
+TIER 2 (1,500-2,200 tokens) — Sonnet
+  Adds: <dependencies> + <business_rules> + <patterns> (2-3) + <edge_cases>
+  For: coordination, state management, component integration
 
-TIER 3 (3,000-4,500 токенов) — Opus
-  Добавляет: <security> + <architecture_context> + <thinking_instruction>
-  Для: критичная логика, нельзя ошибиться
+TIER 3 (3,000-4,500 tokens) — Opus
+  Adds: <security> + <architecture_context> + <thinking_instruction>
+  For: critical logic, cannot be wrong
 ```
 
-### Best Practices для промптов (из Anthropic docs)
+### Best Practices for prompts (from Anthropic docs)
 
-**Структура:**
-- XML-теги: `<role>`, `<contract>`, `<pattern>`, `<task>`, `<success_criteria>`
-- Логический порядок: контекст → данные → задача → критерии
+**Structure:**
+- XML tags: `<role>`, `<contract>`, `<pattern>`, `<task>`, `<success_criteria>`
+- Logical order: context -> data -> task -> criteria
 
-**Ключевые принципы:**
-1. Smallest high-signal tokens — минимум токенов, максимум пользы
-2. Goldilocks zone — не хардкодить логику, но быть specific
-3. Inline contracts — передавать в prompt, не читать через Read
-4. 1-3 diverse examples — из реального проекта, не laundry list
-5. Explicit instructions — "Implement X" не "Can you suggest"
-6. Success criteria — testable conditions в каждом промпте
-7. Say WHAT to do, not WHAT NOT — с объяснением ПОЧЕМУ
+**Key principles:**
+1. Smallest high-signal tokens — minimum tokens, maximum value
+2. Goldilocks zone — do not hardcode logic, but be specific
+3. Inline contracts — pass in the prompt, do not read via Read
+4. 1-3 diverse examples — from the real project, not a laundry list
+5. Explicit instructions — "Implement X" not "Can you suggest"
+6. Success criteria — testable conditions in every prompt
+7. Say WHAT to do, not WHAT NOT — with explanation WHY
 
-**Исключать из промптов:**
-- CLAUDE.md (для основной сессии)
-- Workflow инструкции (агент делает одну задачу)
+**Exclude from prompts:**
+- CLAUDE.md (for the main session)
+- Workflow instructions (the agent does one task)
 - Laundry list edge cases
 - Redundant tool outputs
-- Interfaces слоёв без прямой зависимости
+- Interfaces of layers without direct dependency
 
-### Экономия
-- Токены: 50% меньше
-- Стоимость vs Sonnet для всех: 79% меньше
-- Стоимость vs Opus для всех: 96% меньше
+### Savings
+- Tokens: 50% less
+- Cost vs Sonnet for all: 79% less
+- Cost vs Opus for all: 96% less
 
 ### Sources
 - https://www.anthropic.com/engineering/claude-code-best-practices
@@ -69,69 +69,69 @@ TIER 3 (3,000-4,500 токенов) — Opus
 
 ---
 
-## Проблема 2: Классификация сложности ✅ РЕШЕНО
+## Problem 2: Complexity classification ✅ RESOLVED
 
-### Суть
-Как определить: этот компонент для Haiku (TIER 1) или Opus (TIER 3)? Кто решает? На основе чего?
+### Essence
+How to determine: is this component for Haiku (TIER 1) or Opus (TIER 3)? Who decides? Based on what?
 
-### Решение: Критерии для Runtime Layer
+### Solution: Criteria for Runtime Layer
 
-Не слой определяет сложность, а характеристики задачи:
+Complexity is not defined by the layer, but by task characteristics:
 
-**TIER 1 — HAIKU (детерминированная логика)**
-- Чистые вычисления (формулы, калькуляторы)
-- Простые трансформации данных
-- Stateless операции
-- Нет side effects
-- Легко покрыть unit тестами
-- Формула/алгоритм известен заранее
+**TIER 1 — HAIKU (deterministic logic)**
+- Pure computations (formulas, calculators)
+- Simple data transformations
+- Stateless operations
+- No side effects
+- Easy to cover with unit tests
+- Formula/algorithm known in advance
 
-**TIER 2 — SONNET (координация и state)**
-- Управление состоянием
-- Координация между компонентами
-- Принятие решений на основе состояния
-- Обработка edge cases
-- Интеграция нескольких компонентов
+**TIER 2 — SONNET (coordination and state)**
+- State management
+- Coordination between components
+- Decision-making based on state
+- Handling edge cases
+- Integration of multiple components
 
-**TIER 3 — OPUS (критичная логика)**
-- Ошибка = деньги клиента (BudgetEnforcer)
-- Ошибка = каскадный сбой (CircuitBreaker)
-- Ошибка = потеря информации (ContextCompactor)
-- Ошибка = некорректное исполнение (Scheduler, ParallelExecutor)
-- Интеграция с внешним кодом (Adapters)
+**TIER 3 — OPUS (critical logic)**
+- Error = customer money (BudgetEnforcer)
+- Error = cascade failure (CircuitBreaker)
+- Error = information loss (ContextCompactor)
+- Error = incorrect execution (Scheduler, ParallelExecutor)
+- Integration with external code (Adapters)
 
-### Классификация компонентов Runtime Layer v1
+### Classification of Runtime Layer v1 components
 
-| Компонент | TIER | Обоснование |
-|-----------|------|-------------|
-| TokenEstimator | 1 | Чистая формула: tokens = f(text) |
-| CostCalculator | 1 | Чистая формула: cost = tokens × price |
-| UsageTracker | 1 | Простой аккумулятор |
-| QueueManager | 2 | State, но простой (in-memory queue) |
+| Component | TIER | Rationale |
+|-----------|------|-----------|
+| TokenEstimator | 1 | Pure formula: tokens = f(text) |
+| CostCalculator | 1 | Pure formula: cost = tokens × price |
+| UsageTracker | 1 | Simple accumulator |
+| QueueManager | 2 | State, but simple (in-memory queue) |
 | MemoryManager | 2 | Key-value, short-term |
-| ContextBuilder | 2 | Сборка по известным правилам |
-| ContextRouter | 2 | Передача данных между tasks |
+| ContextBuilder | 2 | Assembly by known rules |
+| ContextRouter | 2 | Passing data between tasks |
 | DependencyResolver | 2 | DAG build and validation |
-| **Scheduler** | **3** | Порядок = корректность всей системы |
+| **Scheduler** | **3** | Order = correctness of the entire system |
 | **ParallelExecutor** | **3** | Race conditions, bounded concurrency |
-| **BudgetEnforcer** | **3** | Ошибка = перерасход денег клиента |
-| **ContextCompactor** | **3** | Ошибка = потеря информации |
+| **BudgetEnforcer** | **3** | Error = customer overspend |
+| **ContextCompactor** | **3** | Error = information loss |
 
 ---
 
-## Проблема 3: Context Sharing ✅ РЕШЕНО
+## Problem 3: Context Sharing ✅ RESOLVED
 
-### Суть
-Агенты работают параллельно — как им делиться контекстом? Нужно ли вообще?
+### Essence
+Agents run in parallel — how do they share context? Is it needed at all?
 
-### Решение: Contracts-First БЕЗ runtime sharing
+### Solution: Contracts-First WITHOUT runtime sharing
 
-**Общие типы и интерфейсы в contracts/ закрывают риск расхождений.**
-Sharing нужен только если появится реальная общая утилита или протокол сериализации.
+**Shared types and interfaces in contracts/ eliminate divergence risk.**
+Sharing is needed only if a real shared utility or serialization protocol appears.
 
-### Что определено в contracts (runtime-layer-v1-draft.md)
+### What is defined in contracts (runtime-layer-v1-draft.md)
 
-**Базовые типы:**
+**Base types:**
 ```go
 type RunID string
 type TaskID string
@@ -142,7 +142,7 @@ type RunState int   // enum: Pending, Running, Completed, Failed, Aborted
 type TaskState int  // enum: Pending, Ready, Running, Completed, Failed, Skipped
 ```
 
-**Структуры данных:**
+**Data structures:**
 ```go
 type Run struct { ID, State, Policy, DAG, Tasks, Usage, CreatedAt, UpdatedAt }
 type Task struct { ID, State, Inputs, Deps, Outputs, Error, Model, EstimatedUse, ActualUse }
@@ -158,112 +158,112 @@ type ContextPolicy struct { MaxTokens, Strategy, KeepLastN, TruncateTo }
 type RunPolicy struct { TimeoutMs, MaxParallelism, BudgetLimit }
 ```
 
-**12 интерфейсов по 3 доменам** — полностью определены.
+**12 interfaces across 3 domains** — fully defined.
 
-### Правила для агентов
+### Rules for agents
 
-1. **Агенты получают:** только свой interface + нужные типы (inline в промпт)
-2. **Агенты НЕ создают:** новые публичные типы, shared helpers, изменения в contracts/
-3. **Internal код:** каждый агент пишет в свой пакет (internal/{domain}/{component}.go)
-4. **Integration phase:** go build ./... — проверка компиляции, поиск дубликатов
+1. **Agents receive:** only their interface + required types (inline in the prompt)
+2. **Agents do NOT create:** new public types, shared helpers, changes in contracts/
+3. **Internal code:** each agent writes in its own package (internal/{domain}/{component}.go)
+4. **Integration phase:** go build ./... — compile check, find duplicates
 
-### Когда sharing НЕ нужен
+### When sharing is NOT needed
 
-| Сценарий | Sharing? | Решение |
-|----------|----------|---------|
-| Общие типы (TokenCount) | ❌ | Inline в промпт |
-| Общие структуры (Run, Task) | ❌ | Inline в промпт |
-| Общие interfaces | ❌ | Inline в промпт |
-| Общие errors | ❌ | Inline в промпт |
-| Internal helpers | ❌ | Каждый в своём пакете |
-| Вызов другого компонента | ❌ | Через interface |
+| Scenario | Sharing? | Solution |
+|----------|----------|----------|
+| Shared types (TokenCount) | ❌ | Inline in the prompt |
+| Shared structures (Run, Task) | ❌ | Inline in the prompt |
+| Shared interfaces | ❌ | Inline in the prompt |
+| Shared errors | ❌ | Inline in the prompt |
+| Internal helpers | ❌ | Each in its own package |
+| Calling another component | ❌ | Via interface |
 
-### Когда sharing МОЖЕТ понадобиться (в будущем)
+### When sharing MAY be needed (future)
 
-- Общая утилита используется 3+ компонентами
-- Протокол сериализации (JSON/Protobuf helpers)
-- Общий middleware/interceptor
+- A shared utility used by 3+ components
+- Serialization protocol (JSON/Protobuf helpers)
+- Shared middleware/interceptor
 
-→ Решение: добавить в contracts/helpers.go или pkg/
+→ Solution: add to contracts/helpers.go or pkg/
 
 ---
 
-## Архитектура решения
+## Architecture of the solution
 
 ```
 /parallel-dev "Implement Runtime Layer v1"
       │
       ▼
-ФАЗА 0: Классификация
-      │ Определить компоненты и их TIER
+PHASE 0: Classification
+      │ Determine components and their TIER
       ▼
-ФАЗА 1: Контракты (уже есть в runtime-layer-v1-draft.md)
+PHASE 1: Contracts (already in runtime-layer-v1-draft.md)
       │ interfaces/, data structures
       ▼
-ФАЗА 2: Реализация (параллельно по TIER)
+PHASE 2: Implementation (parallel by TIER)
       │
-      ├── TIER 1 (Haiku, параллельно):
+      ├── TIER 1 (Haiku, in parallel):
       │   ├── TokenEstimator
       │   ├── CostCalculator
       │   └── UsageTracker
       │
-      ├── TIER 2 (Sonnet, параллельно):
+      ├── TIER 2 (Sonnet, in parallel):
       │   ├── QueueManager
       │   ├── MemoryManager
       │   ├── ContextBuilder
       │   ├── ContextRouter
       │   └── DependencyResolver
       │
-      └── TIER 3 (Opus, последовательно или с review):
+      └── TIER 3 (Opus, sequential or with review):
           ├── Scheduler
           ├── ParallelExecutor
           ├── BudgetEnforcer
           └── ContextCompactor
       │
       ▼
-ФАЗА 3: Интеграция
-      │ Проверка компиляции, тесты, рефактор
+PHASE 3: Integration
+      │ Compile check, tests, refactor
       ▼
-ГОТОВО
+DONE
 ```
 
 ---
 
-## Следующие шаги
+## Next steps
 
-1. [x] Решить проблему 1 (токены) — Tiered Prompts
-2. [x] Решить проблему 2 (классификация) — критерии для Runtime
-3. [x] Решить проблему 3 (context sharing) — Contracts-First без runtime sharing
-4. [x] Создать contracts/ файлы — runtime/contracts/ (5 файлов, компилируется)
-5. [x] Создать шаблоны промптов — runtime/prompts/ (tier1.md, tier2.md, tier3.md)
-6. [x] Реализовать /parallel-dev команду — .claude/commands/parallel-dev.md + manifest.json
+1. [x] Solve problem 1 (tokens) — Tiered Prompts
+2. [x] Solve problem 2 (classification) — criteria for Runtime
+3. [x] Solve problem 3 (context sharing) — Contracts-First without runtime sharing
+4. [x] Create contracts/ files — runtime/contracts/ (5 files, compiles)
+5. [x] Create prompt templates — runtime/prompts/ (tier1.md, tier2.md, tier3.md)
+6. [x] Implement /parallel-dev command — .claude/commands/parallel-dev.md + manifest.json
 7. [x] PoC: TokenEstimator (TIER 1, Haiku) — runtime/internal/cost/token_estimator.go
 8. [x] PoC: Scheduler (TIER 3, Opus) — runtime/internal/orchestration/scheduler.go
 9. [x] PoC: QueueManager (TIER 2, Sonnet) — runtime/internal/orchestration/queue_manager.go
-10. [x] Реализовать все 12 компонентов Runtime Layer
+10. [x] Implement all 12 Runtime Layer components
 
 ---
 
-## Финальный отчёт
+## Final report
 
-### Статистика
+### Statistics
 
-| Метрика | Значение |
+| Metric | Value |
 |---------|----------|
-| Компоненты | 12/12 |
-| Тесты | 195 passed |
+| Components | 12/12 |
+| Tests | 195 passed |
 | Coverage (context) | 100.0% |
 | Coverage (cost) | 98.7% |
 | Coverage (orchestration) | 97.8% |
 | Race conditions | 0 (verified with -race) |
 
-### Компоненты по TIER
+### Components by TIER
 
 **TIER 1 (Haiku):**
 - TokenEstimator ✓
 - CostCalculator ✓
 
-**TIER 2 (Sonnet, параллельно):**
+**TIER 2 (Sonnet, in parallel):**
 - QueueManager ✓
 - UsageTracker ✓
 - DependencyResolver ✓
@@ -271,7 +271,7 @@ type RunPolicy struct { TimeoutMs, MaxParallelism, BudgetLimit }
 - ContextRouter ✓
 - MemoryManager ✓
 
-**TIER 3 (Opus, последовательно):**
+**TIER 3 (Opus, sequential):**
 - Scheduler ✓
 - BudgetEnforcer ✓
 - ParallelExecutor ✓

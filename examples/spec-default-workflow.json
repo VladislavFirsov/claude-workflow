@@ -2,6 +2,14 @@
   "workflow": {
     "name": "spec-default-example",
     "type": "spec-default",
+    "policy": {
+      "timeout_ms": 300000,
+      "max_parallelism": 2,
+      "budget_limit": {
+        "amount": 10.0,
+        "currency": "USD"
+      }
+    },
     "models": {
       "spec-analyst": "claude-sonnet-4-20250514",
       "spec-architect": "claude-sonnet-4-20250514",

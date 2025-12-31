@@ -11,7 +11,7 @@ This document captures the **architectural intent of the `claude-workflow` proje
 The document is for:
 - the architect;
 - core runtime developers;
-- decision-making on the project's дальнейшее развитие.
+- decision-making on the project's future development.
 
 This is **not usage documentation** and **not a product pitch**.
 

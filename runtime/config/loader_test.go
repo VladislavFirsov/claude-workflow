@@ -199,3 +199,79 @@ func TestLoader_LoadFromFile_ValidationError(t *testing.T) {
 		t.Fatalf("expected ErrCycleDetected, got %v", err)
 	}
 }
+
+func TestLoader_LoadFromBytes_WithPolicy(t *testing.T) {
+	l := NewLoader()
+	data := []byte(`{
+		"workflow": {
+			"name": "policy-flow",
+			"policy": {
+				"timeout_ms": 600000,
+				"max_parallelism": 4,
+				"budget_limit": {
+					"amount": 50.0,
+					"currency": "EUR"
+				}
+			},
+			"steps": [
+				{"id": "a", "role": "spec-analyst"},
+				{"id": "b", "role": "spec-architect", "depends_on": ["a"]},
+				{"id": "c", "role": "spec-developer", "depends_on": ["b"]},
+				{"id": "d", "role": "spec-validator", "depends_on": ["c"]}
+			]
+		}
+	}`)
+
+	cfg, err := l.LoadFromBytes(data)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cfg.Workflow.Policy == nil {
+		t.Fatal("expected policy to be set")
+	}
+
+	if cfg.Workflow.Policy.TimeoutMs != 600000 {
+		t.Fatalf("expected timeout_ms=600000, got %d", cfg.Workflow.Policy.TimeoutMs)
+	}
+
+	if cfg.Workflow.Policy.MaxParallelism != 4 {
+		t.Fatalf("expected max_parallelism=4, got %d", cfg.Workflow.Policy.MaxParallelism)
+	}
+
+	if cfg.Workflow.Policy.BudgetLimit == nil {
+		t.Fatal("expected budget_limit to be set")
+	}
+
+	if cfg.Workflow.Policy.BudgetLimit.Amount != 50.0 {
+		t.Fatalf("expected budget amount=50.0, got %f", cfg.Workflow.Policy.BudgetLimit.Amount)
+	}
+
+	if cfg.Workflow.Policy.BudgetLimit.Currency != "EUR" {
+		t.Fatalf("expected currency=EUR, got %s", cfg.Workflow.Policy.BudgetLimit.Currency)
+	}
+}
+
+func TestLoader_LoadFromBytes_WithoutPolicy(t *testing.T) {
+	l := NewLoader()
+	data := []byte(`{
+		"workflow": {
+			"name": "no-policy-flow",
+			"steps": [
+				{"id": "a", "role": "spec-analyst"},
+				{"id": "b", "role": "spec-architect", "depends_on": ["a"]},
+				{"id": "c", "role": "spec-developer", "depends_on": ["b"]},
+				{"id": "d", "role": "spec-validator", "depends_on": ["c"]}
+			]
+		}
+	}`)
+
+	cfg, err := l.LoadFromBytes(data)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cfg.Workflow.Policy != nil {
+		t.Fatalf("expected policy to be nil, got %+v", cfg.Workflow.Policy)
+	}
+}

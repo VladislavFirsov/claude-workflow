@@ -27,6 +27,14 @@ var roleToModel = map[string]string{
 
 const defaultModel = "claude-sonnet-4-20250514"
 
+// Default policy values.
+const (
+	defaultTimeoutMs      int64   = 300000 // 5 minutes
+	defaultMaxParallelism int     = 1      // sequential
+	defaultBudgetAmount   float64 = 10.0   // $10 USD
+	defaultBudgetCurrency string  = "USD"
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -186,17 +194,38 @@ func convertWorkflowConfig(cfg *config.WorkflowConfig, runID string) *startRunRe
 		tasks = append(tasks, task)
 	}
 
-	return &startRunRequest{
-		ID: runID,
-		Policy: policyDTO{
-			TimeoutMs:      300000, // 5 minutes
-			MaxParallelism: 1,      // sequential by default
-			BudgetLimit: costDTO{
-				Amount:   10.0,
-				Currency: "USD",
-			},
+	// Build policy with defaults
+	policy := policyDTO{
+		TimeoutMs:      defaultTimeoutMs,
+		MaxParallelism: defaultMaxParallelism,
+		BudgetLimit: costDTO{
+			Amount:   defaultBudgetAmount,
+			Currency: defaultBudgetCurrency,
 		},
-		Tasks: tasks,
+	}
+
+	// Override from config if specified
+	if cfg.Workflow.Policy != nil {
+		if cfg.Workflow.Policy.TimeoutMs > 0 {
+			policy.TimeoutMs = cfg.Workflow.Policy.TimeoutMs
+		}
+		if cfg.Workflow.Policy.MaxParallelism > 0 {
+			policy.MaxParallelism = cfg.Workflow.Policy.MaxParallelism
+		}
+		if cfg.Workflow.Policy.BudgetLimit != nil {
+			if cfg.Workflow.Policy.BudgetLimit.Amount > 0 {
+				policy.BudgetLimit.Amount = cfg.Workflow.Policy.BudgetLimit.Amount
+			}
+			if cfg.Workflow.Policy.BudgetLimit.Currency != "" {
+				policy.BudgetLimit.Currency = cfg.Workflow.Policy.BudgetLimit.Currency
+			}
+		}
+	}
+
+	return &startRunRequest{
+		ID:     runID,
+		Policy: policy,
+		Tasks:  tasks,
 	}
 }
 
