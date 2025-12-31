@@ -160,6 +160,59 @@ tasks: analyze=completed, design=failed(execution_failed)
 error: [task_failed] task design execution failed: ...
 ```
 
+## Python SDK (v1)
+
+Minimal Python SDK for programmatic access.
+
+**Key characteristics:**
+- **Sync-only, blocking** — no async/await
+- **Opaque request** — `start_run(request)` sends dict as-is, no validation
+- **X-Runtime-Version: v1** — header included in all requests
+- **No dependencies** — uses only Python standard library
+
+### Installation
+
+```bash
+# From project root
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/sdk/python"
+```
+
+### Usage
+
+```python
+from claude_workflow import RuntimeClient
+from claude_workflow import RuntimeError  # Note: not builtin RuntimeError
+
+client = RuntimeClient("http://localhost:8080")
+
+# Start a run (request is opaque dict - SDK doesn't validate)
+request = {
+    "policy": {
+        "timeout_ms": 300000,
+        "max_parallelism": 2,
+        "budget_limit": {"amount": 5.0, "currency": "USD"}
+    },
+    "tasks": [
+        {"id": "analyze", "prompt": "Analyze this", "model": "claude-3-haiku-20240307"},
+        {"id": "design", "prompt": "Design that", "model": "claude-3-sonnet-20240229", "deps": ["analyze"]}
+    ]
+}
+response = client.start_run(request)
+print("Started run: {}".format(response["id"]))
+
+# Poll status
+status = client.get_status(response["id"])
+print("State: {}".format(status["state"]))
+
+# Abort if needed
+try:
+    client.abort_run(response["id"])
+except RuntimeError as e:
+    print("Cannot abort: [{}] {}".format(e.code, e.message))
+```
+
+**Note:** `claude_workflow.RuntimeError` is a custom exception (not Python's builtin). Use explicit import to avoid confusion.
+
 ## Response Format
 
 ```json
