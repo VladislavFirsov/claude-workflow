@@ -1,0 +1,23 @@
+{
+  "id": "example-run-001",
+  "state": "completed",
+  "tasks": {
+    "analyze": {
+      "state": "completed",
+      "output": "Requirements analyzed. Key findings: user authentication required, REST API endpoints needed, PostgreSQL for persistence."
+    },
+    "design": {
+      "state": "completed",
+      "output": "Architecture designed. Components: AuthService, APIGateway, UserRepository. Pattern: Clean Architecture with dependency injection."
+    }
+  },
+  "usage": {
+    "tokens": 350,
+    "cost": {
+      "amount": 0.035,
+      "currency": "USD"
+    }
+  },
+  "created_at": 1704067200000,
+  "updated_at": 1704067300000
+}

@@ -4,3 +4,11 @@ runtime/coverage.out
 runtime/coverage.html
 runtime/usage_tracker_coverage.out
 runtime/workflow-client
+
+# Audit output (runtime generated, not examples)
+/audit/
+/runtime/audit/
+
+# Python artifacts
+sdk/python/__pycache__/
+sdk/python/*.egg-info/
