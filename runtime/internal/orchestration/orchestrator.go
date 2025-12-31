@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/anthropics/claude-workflow/runtime/contracts"
+	"github.com/anthropics/claude-workflow/runtime/internal/audit"
 )
 
 // orchestrator implements contracts.Orchestrator with batched execution loop.
@@ -26,6 +29,9 @@ type orchestrator struct {
 
 	// onProgress is called after each successful batch merge (optional).
 	onProgress func(*contracts.Run)
+
+	// runStart tracks when the run started for duration calculation.
+	runStart time.Time
 }
 
 // OrchestratorDeps contains all dependencies needed by the orchestrator.
@@ -78,15 +84,19 @@ type deniedResult struct {
 
 // batchResult contains the result of executing a single task in a batch.
 type batchResult struct {
-	taskID contracts.TaskID
-	result *contracts.TaskResult
-	err    error
+	taskID    contracts.TaskID
+	result    *contracts.TaskResult
+	err       error
+	startTime time.Time // for duration calculation in audit logs
 }
 
 // Run executes all tasks in the run according to the dependency graph.
 // Uses batched execution: parallel executor I/O, sequential deterministic merge.
 // Fail-fast: any task failure terminates the run immediately.
 func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
+	o.runStart = time.Now()
+	batchNum := 0
+
 	// Init
 	if err := o.init(run); err != nil {
 		return err
@@ -94,9 +104,12 @@ func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
 
 	// Main batched execution loop
 	for {
+		batchNum++
 		select {
 		case <-ctx.Done():
 			run.State = contracts.RunAborted
+			audit.Log("event=run_aborted run_id=%s duration_ms=%d reason=context_cancelled",
+				run.ID, time.Since(o.runStart).Milliseconds())
 			return ctx.Err()
 		default:
 		}
@@ -105,6 +118,8 @@ func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
 		ready, err := o.scheduler.NextReady(run)
 		if err != nil {
 			run.State = contracts.RunFailed
+			audit.Log("event=run_failed run_id=%s duration_ms=%d error_code=scheduler_error error_msg=%s",
+				run.ID, time.Since(o.runStart).Milliseconds(), err.Error())
 			return err
 		}
 
@@ -114,13 +129,19 @@ func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
 				// Check if any task failed - if so, run is failed
 				if o.hasFailures(run) {
 					run.State = contracts.RunFailed
+					// Note: individual task failures already logged, no separate run_failed here
 				} else {
 					run.State = contracts.RunCompleted
+					audit.Log("event=run_completed run_id=%s duration_ms=%d total_tokens=%d total_cost=%.4f%s state=completed",
+						run.ID, time.Since(o.runStart).Milliseconds(), run.Usage.Tokens,
+						run.Usage.Cost.Amount, run.Usage.Cost.Currency)
 				}
 				return nil
 			}
 			// Unreachable if fail-fast works correctly
 			run.State = contracts.RunFailed
+			audit.Log("event=run_failed run_id=%s duration_ms=%d error_code=deadlock",
+				run.ID, time.Since(o.runStart).Milliseconds())
 			return contracts.ErrDeadlock
 		}
 
@@ -143,20 +164,37 @@ func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
 			// Return error for first denied task (with sentinel wrapped)
 			dr := deniedResults[0]
 			run.State = contracts.RunFailed
+			audit.Log("event=run_failed run_id=%s duration_ms=%d error_code=%s task_id=%s",
+				run.ID, time.Since(o.runStart).Milliseconds(), dr.errorCode, dr.taskID)
 			return fmt.Errorf("task %s: %s: %w", dr.taskID, dr.errorMsg, dr.err)
 		}
 
-		// 5. Execute allowed batch (parallel executor calls, NO mutations except TaskRunning)
+		// 5. Log batch started
+		taskIDStrs := make([]string, len(allowed))
+		for i, tid := range allowed {
+			taskIDStrs[i] = string(tid)
+		}
+		audit.Log("event=batch_started run_id=%s batch=%d task_count=%d tasks=%s",
+			run.ID, batchNum, len(allowed), strings.Join(taskIDStrs, ","))
+		batchStart := time.Now()
+
+		// 6. Execute allowed batch (parallel executor calls, NO mutations except TaskRunning)
 		results := o.executeBatch(ctx, run, allowed)
 
-		// 6. Deterministic merge (sequential, sorted by TaskID)
+		// 7. Deterministic merge (sequential, sorted by TaskID)
 		// Returns error on first failure (fail-fast)
 		if err := o.mergeBatchResults(run, results); err != nil {
 			run.State = contracts.RunFailed
+			audit.Log("event=run_failed run_id=%s duration_ms=%d error_code=merge_failed error_msg=%s",
+				run.ID, time.Since(o.runStart).Milliseconds(), err.Error())
 			return err
 		}
 
-		// 7. Call progress callback if set
+		// 8. Log batch completed
+		audit.Log("event=batch_completed run_id=%s batch=%d duration_ms=%d tasks_completed=%d",
+			run.ID, batchNum, time.Since(batchStart).Milliseconds(), len(allowed))
+
+		// 9. Call progress callback if set
 		if o.onProgress != nil {
 			o.onProgress(run)
 		}
@@ -170,9 +208,14 @@ func (o *orchestrator) init(run *contracts.Run) error {
 	}
 	if err := o.depResolver.Validate(run.DAG); err != nil {
 		run.State = contracts.RunFailed
+		audit.Log("event=run_failed run_id=%s duration_ms=%d error_code=dag_validation error_msg=%s",
+			run.ID, time.Since(o.runStart).Milliseconds(), err.Error())
 		return err
 	}
 	run.State = contracts.RunRunning
+	audit.Log("event=run_started run_id=%s policy_timeout_ms=%d policy_parallelism=%d policy_budget=%.2f%s",
+		run.ID, run.Policy.TimeoutMs, run.Policy.MaxParallelism,
+		run.Policy.BudgetLimit.Amount, run.Policy.BudgetLimit.Currency)
 	return nil
 }
 
@@ -254,6 +297,8 @@ func (o *orchestrator) preCheckBudget(
 			Currency: cost.Currency,
 		}
 		if err := o.budgetEnforcer.Allow(run, totalEstimate); err != nil {
+			audit.Log("event=budget_precheck_failed run_id=%s task_id=%s estimated_cost=%.4f%s reason=budget_exceeded",
+				run.ID, tid, cost.Amount, cost.Currency)
 			denied = append(denied, deniedResult{
 				taskID:    tid,
 				errorCode: "budget_exceeded",
@@ -262,6 +307,10 @@ func (o *orchestrator) preCheckBudget(
 			})
 			continue
 		}
+
+		// Budget precheck passed
+		audit.Log("event=budget_precheck_ok run_id=%s task_id=%s estimated_tokens=%d estimated_cost=%.4f%s",
+			run.ID, tid, tokens, cost.Amount, cost.Currency)
 
 		// Reserve this cost for subsequent checks in this batch
 		reservedCost.Amount += cost.Amount
@@ -294,18 +343,24 @@ func (o *orchestrator) executeBatch(
 			task, exists := run.Tasks[tid]
 			if !exists {
 				results[idx] = batchResult{
-					taskID: tid,
-					err:    fmt.Errorf("task %s not found", tid),
+					taskID:    tid,
+					err:       fmt.Errorf("task %s not found", tid),
+					startTime: time.Now(),
 				}
 				return
 			}
+
+			// Log task started (after existence check to avoid panic)
+			taskStart := time.Now()
+			audit.Log("event=task_started run_id=%s task_id=%s model=%s",
+				run.ID, tid, task.Model)
 
 			// Mark as running (safe: each goroutine touches different task)
 			task.State = contracts.TaskRunning
 
 			// Execute via ParallelExecutor (respects ctx, semaphore)
 			result, err := o.executor.Execute(ctx, run, tid)
-			results[idx] = batchResult{taskID: tid, result: result, err: err}
+			results[idx] = batchResult{taskID: tid, result: result, err: err, startTime: taskStart}
 		}(i, taskID)
 	}
 
@@ -336,6 +391,9 @@ func (o *orchestrator) mergeBatchResults(run *contracts.Run, results []batchResu
 				Code:    "execution_failed",
 				Message: r.err.Error(),
 			}
+			durationMs := time.Since(r.startTime).Milliseconds()
+			audit.Log("event=task_failed run_id=%s task_id=%s duration_ms=%d error_code=execution_failed error_msg=%s",
+				run.ID, r.taskID, durationMs, r.err.Error())
 			// FAIL-FAST: return immediately
 			return fmt.Errorf("task %s execution failed: %w", r.taskID, r.err)
 		}
@@ -347,6 +405,9 @@ func (o *orchestrator) mergeBatchResults(run *contracts.Run, results []batchResu
 				Code:    "invalid_result",
 				Message: "executor returned nil or zero usage",
 			}
+			durationMs := time.Since(r.startTime).Milliseconds()
+			audit.Log("event=task_failed run_id=%s task_id=%s duration_ms=%d error_code=invalid_result error_msg=executor returned nil or zero usage",
+				run.ID, r.taskID, durationMs)
 			return fmt.Errorf("task %s: invalid result", r.taskID)
 		}
 
@@ -357,8 +418,14 @@ func (o *orchestrator) mergeBatchResults(run *contracts.Run, results []batchResu
 				Code:    "budget_exceeded",
 				Message: err.Error(),
 			}
+			audit.Log("event=budget_record_failed run_id=%s task_id=%s actual_cost=%.4f%s reason=exceeded",
+				run.ID, r.taskID, r.result.Usage.Cost.Amount, r.result.Usage.Cost.Currency)
 			return fmt.Errorf("task %s budget exceeded: %w", r.taskID, err)
 		}
+
+		// Budget record succeeded
+		audit.Log("event=budget_record_ok run_id=%s task_id=%s actual_cost=%.4f%s",
+			run.ID, r.taskID, r.result.Usage.Cost.Amount, r.result.Usage.Cost.Currency)
 
 		// Track usage
 		o.usageTracker.Add(run, r.result.Usage)
@@ -371,8 +438,17 @@ func (o *orchestrator) mergeBatchResults(run *contracts.Run, results []batchResu
 				Code:    "scheduler_error",
 				Message: err.Error(),
 			}
+			durationMs := time.Since(r.startTime).Milliseconds()
+			audit.Log("event=task_failed run_id=%s task_id=%s duration_ms=%d error_code=scheduler_error error_msg=%s",
+				run.ID, r.taskID, durationMs, err.Error())
 			return fmt.Errorf("task %s scheduler error: %w", r.taskID, err)
 		}
+
+		// Task completed successfully - log after all finalization steps
+		durationMs := time.Since(r.startTime).Milliseconds()
+		audit.Log("event=task_completed run_id=%s task_id=%s duration_ms=%d tokens=%d cost=%.4f%s",
+			run.ID, r.taskID, durationMs, r.result.Usage.Tokens,
+			r.result.Usage.Cost.Amount, r.result.Usage.Cost.Currency)
 
 		// Route to dependents: iterate DAG.Nodes[taskID].Next
 		// Routing errors are FATAL — inconsistent context state

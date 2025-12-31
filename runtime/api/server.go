@@ -12,12 +12,14 @@ type Server struct {
 	executor   TaskExecutorFunc
 	httpServer *http.Server
 	handlers   *Handlers
+	auditDir   string // directory for run audit JSON files (empty = disabled)
 }
 
 // NewServer creates a new Server instance.
-func NewServer(addr string, executor TaskExecutorFunc) *Server {
+// auditDir specifies the directory for run audit JSON files (empty = disabled).
+func NewServer(addr string, executor TaskExecutorFunc, auditDir string) *Server {
 	store := NewRunStore()
-	handlers := NewHandlers(store, executor)
+	handlers := NewHandlers(store, executor, auditDir)
 
 	mux := http.NewServeMux()
 
@@ -31,6 +33,7 @@ func NewServer(addr string, executor TaskExecutorFunc) *Server {
 		store:    store,
 		executor: executor,
 		handlers: handlers,
+		auditDir: auditDir,
 		httpServer: &http.Server{
 			Addr:         addr,
 			Handler:      mux,

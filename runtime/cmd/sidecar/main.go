@@ -19,15 +19,19 @@ import (
 func main() {
 	// Parse flags
 	addr := flag.String("addr", ":8080", "HTTP server address")
+	auditDir := flag.String("audit-dir", "", "Directory for run audit JSON files (optional)")
 	flag.Parse()
 
 	log.Printf("Starting runtime sidecar on %s", *addr)
+	if *auditDir != "" {
+		log.Printf("Audit files will be written to: %s", *auditDir)
+	}
 
 	// Create executor (mock for now)
 	executor := mockExecutor
 
 	// Create and start server
-	server := api.NewServer(*addr, executor)
+	server := api.NewServer(*addr, executor, *auditDir)
 
 	// Handle graceful shutdown
 	done := make(chan struct{})

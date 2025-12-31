@@ -168,7 +168,7 @@ func TestHandleStartRun_Success(t *testing.T) {
 		}, nil
 	}
 
-	server := NewServer(":0", executor)
+	server := NewServer(":0", executor, "")
 
 	reqBody := `{
 		"id": "test-run",
@@ -203,7 +203,7 @@ func TestHandleStartRun_Success(t *testing.T) {
 }
 
 func TestHandleStartRun_InvalidJSON(t *testing.T) {
-	server := NewServer(":0", nil)
+	server := NewServer(":0", nil, "")
 
 	req := httptest.NewRequest("POST", "/api/v1/runs", bytes.NewBufferString("{invalid json"))
 	w := httptest.NewRecorder()
@@ -216,7 +216,7 @@ func TestHandleStartRun_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleStartRun_DAGCycle(t *testing.T) {
-	server := NewServer(":0", nil)
+	server := NewServer(":0", nil, "")
 
 	reqBody := `{
 		"policy": {"max_parallelism": 1, "budget_limit": {"amount": 1.0, "currency": "USD"}},
@@ -243,7 +243,7 @@ func TestHandleStartRun_DuplicateID(t *testing.T) {
 		return &contracts.TaskResult{Output: "ok"}, nil
 	}
 
-	server := NewServer(":0", executor)
+	server := NewServer(":0", executor, "")
 
 	reqBody := `{
 		"id": "dup-run",
@@ -271,7 +271,7 @@ func TestHandleStartRun_DuplicateID(t *testing.T) {
 }
 
 func TestHandleGetStatus_NotFound(t *testing.T) {
-	server := NewServer(":0", nil)
+	server := NewServer(":0", nil, "")
 
 	req := httptest.NewRequest("GET", "/api/v1/runs/non-existent", nil)
 	req.SetPathValue("id", "non-existent")
@@ -285,7 +285,7 @@ func TestHandleGetStatus_NotFound(t *testing.T) {
 }
 
 func TestHandleAbort_AlreadyCompleted(t *testing.T) {
-	server := NewServer(":0", nil)
+	server := NewServer(":0", nil, "")
 
 	// Create a completed run directly
 	run := &contracts.Run{ID: "completed-run", State: contracts.RunCompleted}
@@ -305,7 +305,7 @@ func TestHandleAbort_AlreadyCompleted(t *testing.T) {
 }
 
 func TestHandleStartRun_MissingModel(t *testing.T) {
-	server := NewServer(":0", nil)
+	server := NewServer(":0", nil, "")
 
 	reqBody := `{
 		"policy": {"max_parallelism": 1, "budget_limit": {"amount": 1.0, "currency": "USD"}},
@@ -323,7 +323,7 @@ func TestHandleStartRun_MissingModel(t *testing.T) {
 }
 
 func TestHandleStartRun_ZeroBudget(t *testing.T) {
-	server := NewServer(":0", nil)
+	server := NewServer(":0", nil, "")
 
 	reqBody := `{
 		"policy": {"max_parallelism": 1, "budget_limit": {"amount": 0, "currency": "USD"}},
@@ -381,7 +381,7 @@ func TestRunStore_GetSnapshot(t *testing.T) {
 }
 
 func TestHandleEnqueueTask_NotImplemented(t *testing.T) {
-	server := NewServer(":0", nil)
+	server := NewServer(":0", nil, "")
 
 	req := httptest.NewRequest("POST", "/api/v1/runs/any/tasks", nil)
 	req.SetPathValue("id", "any")
@@ -414,7 +414,7 @@ func TestServer_FullCycle(t *testing.T) {
 		}, nil
 	}
 
-	server := NewServer(":0", executor)
+	server := NewServer(":0", executor, "")
 
 	// 1. Start run
 	reqBody := `{
@@ -491,7 +491,7 @@ func TestServer_AbortRunning(t *testing.T) {
 		}
 	}
 
-	server := NewServer(":0", executor)
+	server := NewServer(":0", executor, "")
 
 	// 1. Start run
 	reqBody := `{

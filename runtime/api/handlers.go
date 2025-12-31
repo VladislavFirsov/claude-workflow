@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/anthropics/claude-workflow/runtime/contracts"
@@ -28,13 +31,16 @@ type TaskExecutorFunc = orchestration.TaskExecutorFunc
 type Handlers struct {
 	store    *RunStore
 	executor TaskExecutorFunc
+	auditDir string // directory for run audit JSON files (empty = disabled)
 }
 
 // NewHandlers creates a new Handlers instance.
-func NewHandlers(store *RunStore, executor TaskExecutorFunc) *Handlers {
+// auditDir specifies the directory for run audit JSON files (empty = disabled).
+func NewHandlers(store *RunStore, executor TaskExecutorFunc, auditDir string) *Handlers {
 	return &Handlers{
 		store:    store,
 		executor: executor,
+		auditDir: auditDir,
 	}
 }
 
@@ -229,6 +235,39 @@ func (h *Handlers) runOrchestrator(ctx context.Context, run *contracts.Run) {
 	orch := orchestration.NewOrchestratorWithCallback(deps, onProgress)
 	err := orch.Run(ctx, run)
 	h.store.MarkDone(run.ID, err)
+
+	// Write audit file if configured
+	if h.auditDir != "" {
+		h.writeAuditFile(run.ID)
+	}
+}
+
+// writeAuditFile writes the run audit to a JSON file in the configured audit directory.
+func (h *Handlers) writeAuditFile(runID contracts.RunID) {
+	snap, exists := h.store.GetSnapshot(runID)
+	if !exists {
+		log.Printf("[AUDIT] warning: cannot write audit file, run %s not found", runID)
+		return
+	}
+
+	resp := SnapshotToResponse(snap)
+	data, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		log.Printf("[AUDIT] error: failed to marshal audit JSON for run %s: %v", runID, err)
+		return
+	}
+
+	filename := filepath.Join(h.auditDir, fmt.Sprintf("run-%s.json", runID))
+	if err := os.MkdirAll(h.auditDir, 0755); err != nil {
+		log.Printf("[AUDIT] error: failed to create audit dir %s: %v", h.auditDir, err)
+		return
+	}
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		log.Printf("[AUDIT] error: failed to write audit file %s: %v", filename, err)
+		return
+	}
+
+	log.Printf("[AUDIT] event=audit_file_written run_id=%s path=%s", runID, filename)
 }
 
 // defaultExecutor is a fallback TaskExecutorFunc when none is provided.
