@@ -213,6 +213,18 @@ except RuntimeError as e:
 
 **Note:** `claude_workflow.RuntimeError` is a custom exception (not Python's builtin). Use explicit import to avoid confusion.
 
+## Execution Audit (v1)
+
+The sidecar can emit structured audit logs and write a per-run JSON snapshot.
+
+### Enable audit files
+
+```bash
+./sidecar -addr :8080 -audit-dir ./runtime/audit
+```
+
+On completion, the sidecar writes `run-<id>.json` to the audit directory and logs events with the `[AUDIT]` prefix.
+
 ## Response Format
 
 ```json

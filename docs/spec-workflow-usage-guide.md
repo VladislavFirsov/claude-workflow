@@ -4,6 +4,8 @@
 
 The Spec Agent Workflow System is a comprehensive AI-driven development pipeline that transforms project ideas into production-ready code through specialized agents working in coordinated phases. This guide provides practical examples and usage instructions.
 
+**Runtime integration note:** the workflow layer is a thin client of the runtime sidecar. It submits runs and polls status; the runtime enforces execution policy, ordering, and audit.
+
 ## Quick Start
 
 ### Basic Usage
@@ -32,7 +34,7 @@ Use the spec-orchestrator agent: --phase development --from-artifacts ./planning
 │   ├── spec-tester.md          # Testing
 │   ├── spec-reviewer.md        # Code review
 │   └── spec-validator.md       # Final validation
-├── ui-ux-master-agent.md       # UI/UX design integration
+├── ui-ux-master.md              # UI/UX design integration
 ├── senior-backend-architect.md  # Backend expertise
 └── senior-frontend-architect.md # Frontend expertise
 ```

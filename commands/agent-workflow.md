@@ -159,11 +159,11 @@ All agent-generated documents follow the unified storage standards below:
 
 ```yaml
 project-info:
-  name: "claude-sub-agent"
-  display-name: "Claude Sub-Agent Spec Workflow System"
+  name: "claude-workflow"
+  display-name: "Claude Workflow Runtime"
   version: "v1.0"
-  doc-root: "./claude/docs/"
-  legacy-root: "./claude/"
+  doc-root: "./docs/"
+  legacy-root: "./docs/"
 ```
 
 #### Path Generation Rules
@@ -171,6 +171,6 @@ project-info:
 Claude Code automatically applies the following path generation logic:
 
 ```
-./claude/docs/{YYYY}/{MM}/{DD}/{doc-type}/{subdirectory}/
+./docs/{YYYY_MM_DD}/{doc-type}/{subdirectory}/
 {agent}_{artifact}_{project}_{version}_{timestamp}.md
 ```

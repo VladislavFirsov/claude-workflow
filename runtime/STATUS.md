@@ -1,7 +1,7 @@
 # Runtime Layer — Project Status
 
-> **Last Updated:** 2025-12-28
-> **Status:** Core Complete, HTTP API Done
+> **Last Updated:** 2025-12-31
+> **Status:** Core Complete, HTTP API + SDK + Audit Done
 
 ## Quick Start for New Session
 
@@ -66,10 +66,10 @@ go test ./... -v
   - Sidecar binary: `cmd/sidecar/main.go`
 
 ### Next
-1. Config system for ModelCatalog + policies (YAML/JSON).
-2. LangChain adapter (Python SDK).
-3. Observability (logs, metrics, tracing).
-4. CLI for local runs and debugging.
+1. Config system for ModelCatalog + policies (JSON only; YAML v1.1).
+2. LangChain adapter (Python SDK integration layer).
+3. Observability v1.1 (Prometheus/OTel).
+4. CLI enhancements for local runs and debugging.
 
 ---
 
@@ -143,35 +143,17 @@ runtime/cmd/sidecar/
 
 ---
 
-## Next Steps (TODO) — Updated Plan
+## Execution Audit (v1)
 
-Aligned with `CLAUDE.md` and latest decisions:
-- Workflow is a thin client of runtime (integrate now).
-- Deterministic DAG scheduling with batched execution.
-- Reproducibility prioritized over throughput.
+Implemented:
+- Structured audit logs (`[AUDIT]` events for run/batch/task/budget)
+- Per-run JSON snapshot via `-audit-dir` flag
 
-### 1. Deterministic batched scheduling (core execution semantics)
-- Orchestrator executes DAG in deterministic batches (topologically ready set sorted by TaskID).
-- No worker pool; each batch runs concurrently up to policy.MaxParallelism, then waits for completion.
-- Preserve reproducibility: stable ordering, deterministic merge of results/errors.
-- Update tests to cover batched semantics and ordering invariants.
+## Workflow + SDK (v1)
 
-### 2. State consistency on all error paths
-- Ensure task state + error are set for any failure after execution (budget record, routing, scheduler).
-- Ensure RunStore shadow state reflects final task failures for accurate API snapshots.
-
-### 3. Cancellation and timeout responsiveness
-- Make executor wait for concurrency slot respect ctx cancellation (no blocking on sem forever).
-- Fix RunStore.WaitAll to wait for any completion, not just the first channel.
-
-### 4. Workflow → runtime integration (thin client)
-- Update workflow command(s) to submit runs to runtime HTTP API.
-- Keep workflow layer model-agnostic; runtime remains the execution authority.
-- Add minimal integration guide and example payloads.
-
-### 5. Policy enforcement completeness
-- Implement ContextPolicy.TruncateTo or remove the field if out of scope.
-- Validate policy options and document supported strategies.
+Implemented:
+- Workflow config submission (`workflow-client submit-config`)
+- Python SDK (sync-only, opaque request payload)
 
 ---
 

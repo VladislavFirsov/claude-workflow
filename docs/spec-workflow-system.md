@@ -4,6 +4,8 @@
 
 The Spec Agent Workflow System combines BMAD's proven multi-agent architecture with Claude Code's Sub-Agents capability to create an automated, quality-gated development pipeline. This system transforms complex projects from conception to production-ready code through specialized AI agents working in coordinated sequences.
 
+**Runtime integration note:** the workflow layer is a client of the runtime sidecar. It defines *what* to do and submits runs to the runtime, which enforces *how* execution happens (DAG ordering, budget, context, and audit).
+
 ## Core Philosophy
 
 ### 1. **Specialized Expertise**

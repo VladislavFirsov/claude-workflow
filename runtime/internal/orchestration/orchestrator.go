@@ -129,7 +129,8 @@ func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
 				// Check if any task failed - if so, run is failed
 				if o.hasFailures(run) {
 					run.State = contracts.RunFailed
-					// Note: individual task failures already logged, no separate run_failed here
+					audit.Log("event=run_failed run_id=%s duration_ms=%d error_code=task_failed",
+						run.ID, time.Since(o.runStart).Milliseconds())
 				} else {
 					run.State = contracts.RunCompleted
 					audit.Log("event=run_completed run_id=%s duration_ms=%d total_tokens=%d total_cost=%.4f%s state=completed",
@@ -204,6 +205,8 @@ func (o *orchestrator) Run(ctx context.Context, run *contracts.Run) error {
 // init validates the run and marks it as running.
 func (o *orchestrator) init(run *contracts.Run) error {
 	if run == nil || run.DAG == nil {
+		audit.Log("event=run_failed run_id=unknown duration_ms=%d error_code=invalid_input",
+			time.Since(o.runStart).Milliseconds())
 		return contracts.ErrInvalidInput
 	}
 	if err := o.depResolver.Validate(run.DAG); err != nil {

@@ -51,8 +51,6 @@
 
 ### SDK -> Sidecar
 - StartRun: create a run with policy, budget, and graph.
-- EnqueueTask: submit task with inputs and dependencies.
-- ExecuteTask: request execution when task is ready.
 - GetRunStatus: poll for progress and usage.
 - AbortRun: cancel and release resources.
 
@@ -62,7 +60,7 @@
 
 ## Data Flow (Happy Path)
 1. SDK creates run with policy + budget.
-2. SDK submits task graph.
+2. SDK submits task graph in StartRun.
 3. Sidecar builds DAG and validates.
 4. Scheduler releases ready tasks.
 5. Cost + Context modules evaluate before execution.
@@ -76,7 +74,8 @@
 - Deterministic scheduling + bounded parallelism.
 - Pre-execution cost estimation + hard budget cutoffs.
 - Rule-based context compaction (deterministic).
-- LangChain adapter in Python SDK (minimal wrapper).
+- Python SDK (sync-only client, opaque request).
+- Execution audit: structured logs + per-run JSON snapshots.
 
 ## Go Interfaces (Contracts)
 
@@ -255,17 +254,13 @@ type RunPolicy struct {
 }
 ```
 
-## Open Questions (Decisions for v1 Coding)
+## Decisions (Resolved in v1)
 
 ### Scheduler Semantics
-- Option A: strict topological order (deterministic, no priorities).
-- Option B: topological + priority queue (deterministic tie-breaker).
-- Proposed v1: Option B with stable ordering (priority, then TaskID).
+- Deterministic topological order with TaskID tie-breaker.
 
 ### Budget Granularity
-- Option A: per run only (simple, predictable).
-- Option B: per task + per run (more control, more config).
-- Proposed v1: Option A, with optional per-task override if set.
+- Per-run budgets (fail fast).
 
 ## Risks and Mitigations
 - Risk: in-memory state loss on crash.
@@ -284,9 +279,8 @@ type RunPolicy struct {
   in `runtime/internal/orchestration/factory_test.go`.
 
 ## Open Questions
-- Policy surface: which knobs are exposed in v1 (timeouts, max parallelism)?
-- Budget granularity: per run vs per task?
-- Scheduler semantics: strict topological order vs priority queue?
+- LangChain adapter packaging and interface surface.
+- Persistent storage for runs (v1.1+).
 
 ## Next Steps
 - Define HTTP API schema and versioning.
