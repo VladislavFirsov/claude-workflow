@@ -236,7 +236,7 @@ DONE
 3. [x] Solve problem 3 (context sharing) — Contracts-First without runtime sharing
 4. [x] Create contracts/ files — runtime/contracts/ (5 files, compiles)
 5. [x] Create prompt templates — runtime/prompts/ (tier1.md, tier2.md, tier3.md)
-6. [x] Implement /parallel-dev command — .claude/commands/parallel-dev.md + manifest.json
+6. [x] Implement workflow-client submit-config + runtime/manifest.json
 7. [x] PoC: TokenEstimator (TIER 1, Haiku) — runtime/internal/cost/token_estimator.go
 8. [x] PoC: Scheduler (TIER 3, Opus) — runtime/internal/orchestration/scheduler.go
 9. [x] PoC: QueueManager (TIER 2, Sonnet) — runtime/internal/orchestration/queue_manager.go
